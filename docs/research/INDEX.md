@@ -11,6 +11,11 @@ Each note is self-contained and copy-paste-into-code ready.
 
 - [Space-Track CDM API](space-track-cdm-api.md) — cdm_public vs cdm classes, auth + cookies, rate limits (30/min, 300/hr), python-spacetrack snippet, NASA CARA Pc thresholds, TraCSS migration seam (ingested 2026-05-24)
 
+## Tier 3 — daily / per-event / quarterly (reference for post-MVP Phase 1)
+
+- [FAA NOTAM API](faa-notam-api.md) — NOTAM Search + DINS + SWIM FNS access tiers, Q-line/E-line parsing, Starship IFT-9 (A1559/25) worked example, slip-state decision lookup (NOTAMC→scrub / NOTAMR→slip), TraCSS LCOLA seam, runnable DINS regex ingestor (ingested 2026-05-24)
+- [FCC IBFS API](fcc-ibfs-api.md) — licensing.fcc.gov/myibfs/ + opendata.fcc.gov + ITU SNL surfaces, Schedule S → Schedule O/F transition (FCC 24-97 NPRM), EPFD decision lookup, recent rulings (Kuiper / Starlink Gen2 / Starlink V-E / AST SCS), BeautifulSoup + Socrata ingest variants (ingested 2026-05-24)
+
 ## Patterns
 
 - [Small-Model Ensemble Arbiter](small-model-ensemble-arbiter.md) — three-role decomposition (classifier / risk scorer / action drafter), deterministic arbiter logic, confidence calibration (Brier, temperature scaling), abstain-on-disagreement, OpenRouter cost model, 40-line Python skeleton (ingested 2026-05-24)
@@ -21,9 +26,7 @@ Each note is self-contained and copy-paste-into-code ready.
 ## Deferred (schema-conformant stubs only — see SCOPE.md non-goals)
 
 - Celestrak orbital catalog ingest
-- FAA NOTAM launch / regulatory ingest
-- FCC IBFS spectrum filings
-- ITU spectrum coordination
+- ITU spectrum coordination (BR IFIC API, paid SNS subscription) — partial coverage in [FCC IBFS API](fcc-ibfs-api.md) §11
 
 ---
 
