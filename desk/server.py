@@ -36,6 +36,8 @@ import random
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections import deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -208,6 +210,177 @@ TOKEN_USAGE = {
 }
 
 
+# ============================================================================
+# Inference mode — SIM (default) vs LIVE-OLLAMA.
+# This is the bridge to the user's RTX 5070 + WSL Ollama setup. By default
+# every assessor vote is a deterministic Python computation; in live mode the
+# server POSTs a short prompt to Ollama and the model's output shifts the
+# score. The top-bar badge always declares which mode is hot.
+# ============================================================================
+
+INFERENCE = {
+    "mode": "SIM",                # "SIM" | "LIVE-OLLAMA"
+    "ollama_url": os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
+    "live_model": os.environ.get("OLLAMA_MODEL", "nemotron-3-nano:4b"),
+    "fallback_models": ["qwen2.5:7b", "llama3.1:8b"],
+    "available_models": [],
+    "last_probe_ts": 0.0,
+    "last_call_ms": None,
+    "live_calls": 0,
+    "live_failures": 0,
+    "last_response": None,
+    "host_gpu": None,             # populated when nvidia-smi is reachable
+}
+
+
+def _http_get(url: str, timeout: float = 2.5) -> dict | None:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, ConnectionResetError, TimeoutError, OSError, json.JSONDecodeError):
+        return None
+
+
+def _http_post(url: str, body: dict, timeout: float = 12.0) -> tuple[dict | None, float]:
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8")), (time.time() - t0) * 1000.0
+    except Exception:
+        return None, (time.time() - t0) * 1000.0
+
+
+def probe_ollama() -> dict:
+    """Hit Ollama's `/api/tags`. If reachable + a usable model is available,
+    flip INFERENCE['mode'] to LIVE-OLLAMA. Returns a status payload for the UI.
+    """
+    INFERENCE["last_probe_ts"] = time.time()
+    tags = _http_get(INFERENCE["ollama_url"].rstrip("/") + "/api/tags")
+    if tags is None:
+        INFERENCE["mode"] = "SIM"
+        INFERENCE["available_models"] = []
+        return {"ok": False, "reason": "Ollama unreachable", "url": INFERENCE["ollama_url"]}
+
+    models = [m["name"] for m in tags.get("models", [])]
+    INFERENCE["available_models"] = models
+
+    candidates = [INFERENCE["live_model"]] + INFERENCE["fallback_models"]
+    chosen = next((c for c in candidates if c in models), None)
+    if chosen is None:
+        INFERENCE["mode"] = "SIM"
+        return {"ok": False, "reason": "no compatible model loaded", "available": models}
+
+    INFERENCE["live_model"] = chosen
+
+    # Real test call so the GPU actually wakes up.
+    body = {
+        "model": chosen,
+        "messages": [
+            {"role": "system", "content": "Reply with one word only."},
+            {"role": "user",   "content": "Is the GPU warm? Reply with one word: yes or no."},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.0, "num_predict": 8},
+    }
+    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body)
+    INFERENCE["last_call_ms"] = round(ms, 1)
+    if resp is None:
+        INFERENCE["mode"] = "SIM"
+        INFERENCE["live_failures"] += 1
+        return {"ok": False, "reason": "chat call failed", "model": chosen, "ms": INFERENCE["last_call_ms"]}
+
+    INFERENCE["last_response"] = (resp.get("message") or {}).get("content", "")[:200]
+    INFERENCE["mode"] = "LIVE-OLLAMA"
+    INFERENCE["live_calls"] += 1
+    return {
+        "ok": True,
+        "model": chosen,
+        "ms": INFERENCE["last_call_ms"],
+        "response": INFERENCE["last_response"],
+        "available": models,
+    }
+
+
+def live_assessor_call(sat: dict, wx: dict, prompt_only: bool = False) -> dict | None:
+    """One round trip per sat to the local model. Returns parsed result or None.
+
+    The model is asked to grade health on a four-state scale. The output is
+    parsed permissively — if parsing fails we still record the latency so the
+    user can confirm a real GPU call happened.
+    """
+    if INFERENCE["mode"] != "LIVE-OLLAMA":
+        return None
+    prompt = (
+        f"Satellite {sat['name']} ({sat['regime']}, op {sat['operator']}). "
+        f"Age {sat_age_years(sat):.1f}y of {sat['design_life_years']}y design life. "
+        f"TID {sat['tid_accumulated_krad']:.1f}/{sat['tid_budget_krad']:.0f} krad. "
+        f"SEEs (30d): {sat['see_events_30d']}. "
+        f"Weather: Kp {wx['kp']}, X-ray {wx['xray_class']}, SEP {wx['sep_pfu']} pfu. "
+        f"Output ONLY one word from {{GREEN, YELLOW, RED, BLACK}} — the operational health."
+    )
+    body = {
+        "model": INFERENCE["live_model"],
+        "messages": [
+            {"role": "system", "content": "You are a spacecraft operations health classifier."},
+            {"role": "user",   "content": prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.0, "num_predict": 12},
+    }
+    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=8.0)
+    INFERENCE["last_call_ms"] = round(ms, 1)
+    if resp is None:
+        INFERENCE["live_failures"] += 1
+        return None
+    INFERENCE["live_calls"] += 1
+    raw = (resp.get("message") or {}).get("content", "").strip().upper()
+    INFERENCE["last_response"] = raw[:80]
+    label = next((k for k in ("BLACK", "RED", "YELLOW", "GREEN") if k in raw), None)
+    return {"label": label, "raw": raw, "ms": INFERENCE["last_call_ms"]}
+
+
+def host_gpu_snapshot() -> dict | None:
+    """Best-effort nvidia-smi probe. None on machines without NVIDIA GPU."""
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        if r.returncode != 0:
+            return None
+        parts = [p.strip() for p in r.stdout.splitlines()[0].split(",")]
+        return {
+            "name": parts[0],
+            "util_pct": int(parts[1]),
+            "mem_used_mib": int(parts[2]),
+            "mem_total_mib": int(parts[3]),
+        }
+    except Exception:
+        return None
+
+
+def inference_view() -> dict:
+    return {
+        "mode": INFERENCE["mode"],
+        "ollama_url": INFERENCE["ollama_url"],
+        "live_model": INFERENCE["live_model"],
+        "available_models": INFERENCE["available_models"],
+        "live_calls": INFERENCE["live_calls"],
+        "live_failures": INFERENCE["live_failures"],
+        "last_call_ms": INFERENCE["last_call_ms"],
+        "last_response": INFERENCE["last_response"],
+        "host_gpu": INFERENCE["host_gpu"],
+    }
+
+
 def regime_weather_weight(regime: str, wx: dict) -> float:
     """How much the current weather hurts each regime."""
     kp = wx["kp"]
@@ -267,6 +440,23 @@ def assess_sat(sat: dict, wx: dict) -> dict:
     """Run every assessor, take the median label, return assessment dossier."""
     votes = []
     scores = []
+    # If live mode is on, the real model contributes one vote with the highest
+    # weight; the other "assessor" rows remain as their stylised cohort so the
+    # tree visualisation stays populated. Failure falls back to SIM cleanly.
+    live_label = None
+    if INFERENCE["mode"] == "LIVE-OLLAMA":
+        live = live_assessor_call(sat, wx)
+        if live and live["label"]:
+            live_label = live["label"]
+            votes.append({
+                "model": INFERENCE["live_model"],
+                "family": "ollama-local-GPU",
+                "label": live_label,
+                "score": {"GREEN": 0.2, "YELLOW": 0.6, "RED": 0.9, "BLACK": 1.2}[live_label],
+                "live": True,
+                "ms": live["ms"],
+            })
+            scores.append(votes[-1]["score"])
     for m in ASSESSORS:
         label, sc = assessor_vote(m, sat, wx)
         votes.append({"model": m["id"], "family": m["family"], "label": label, "score": round(sc, 3)})
@@ -409,6 +599,7 @@ class Bus:
                     pass
 
     def snapshot(self) -> dict:
+        INFERENCE["host_gpu"] = host_gpu_snapshot()
         return {
             "type": "snapshot",
             "sats": [public_sat(s) for s in SATS],
@@ -416,6 +607,7 @@ class Bus:
             "weather": WEATHER.snapshot(),
             "focused": focused_sat_view(),
             "tokens": token_view(),
+            "inference": inference_view(),
             "assessors": [{"id": a["id"], "family": a["family"], "bias": a["bias"]} for a in ASSESSORS],
             "copilot": list(self.copilot_log),
             "alerts": list(self.alerts),
@@ -613,11 +805,13 @@ def assessment_loop() -> None:
                 f.write(json.dumps({k: v for k, v in ev.items() if not k.startswith("_")}) + "\n")
 
             # broadcast new fleet snapshot
+            INFERENCE["host_gpu"] = host_gpu_snapshot()
             BUS.publish({
                 "type": "fleet_update",
                 "fleet_health": fleet_health_counts(),
                 "weather": wx,
                 "tokens": token_view(),
+                "inference": inference_view(),
                 "sats": [public_sat(s) for s in SATS],
                 "focused": focused_sat_view(),
                 "last_assessed": {"sat_id": sat["id"], "assessment": assessment, "health": sat["health"]},
@@ -641,7 +835,7 @@ def copilot_loop() -> None:
     while True:
         if _RUN_FLAG["value"]:
             cmd = random.choice(operator_commands)
-            BUS.copilot("user", cmd, who_label="S. Chen")
+            BUS.copilot("user", cmd, who_label="Sampras")
             time.sleep(random.uniform(2, 5))
             # synthesize a response based on current state
             worst = sorted(SATS, key=lambda s: -s["score"])[0]
@@ -768,7 +962,7 @@ def run_terminal_command(line: str) -> str:
         n = int(args[0]) if args else 5
         return "\n".join(f"[{a['ts']}] {a['severity']:4s} {a['message']}" for a in list(BUS.alerts)[-n:]) or "(none)"
     if cmd == "approve":
-        BUS.copilot("user", "approve recommendation", who_label="S. Chen")
+        BUS.copilot("user", "approve recommendation", who_label="Sampras")
         BUS.copilot("nemoclaw", "Approved — command sent to NemoClaw audit.", action="APPROVED")
         return "approved"
     if cmd == "start":
@@ -876,13 +1070,28 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"focused": sat["id"]})
             return
         if self.path == "/api/approve":
-            BUS.copilot("user", "approve recommendation", who_label="S. Chen")
+            BUS.copilot("user", "approve recommendation", who_label="Sampras")
             BUS.copilot("nemoclaw", "Approved — command queued to NemoClaw audit.", action="APPROVED")
             self._send_json({"ok": True}); return
         if self.path == "/api/storm":
             kind = body.get("kind", "flare")
             run_terminal_command(f"storm {kind}")
             self._send_json({"ok": True}); return
+        if self.path == "/api/probe-ollama":
+            result = probe_ollama()
+            BUS.publish({"type": "inference", "inference": inference_view(), "probe": result})
+            self._send_json(result); return
+        if self.path == "/api/inference":
+            mode = (body.get("mode") or "").upper()
+            if mode == "SIM":
+                INFERENCE["mode"] = "SIM"
+            elif mode == "LIVE-OLLAMA":
+                # only honoured if Ollama is reachable
+                result = probe_ollama()
+                if not result.get("ok"):
+                    self._send_json({"error": "Ollama not ready", "detail": result}, status=409); return
+            BUS.publish({"type": "inference", "inference": inference_view()})
+            self._send_json({"mode": INFERENCE["mode"]}); return
         self.send_error(404)
 
 
@@ -896,6 +1105,15 @@ def main() -> None:
     for s in SATS:
         for _ in range(20):
             update_telemetry(s)
+
+    # Auto-probe Ollama once at boot so the user immediately sees whether
+    # LIVE-OLLAMA is available without having to click anything.
+    INFERENCE["host_gpu"] = host_gpu_snapshot()
+    try:
+        boot_probe = probe_ollama()
+        print(f"[spacesharks-desk] Ollama probe: {boot_probe}", flush=True)
+    except Exception as e:
+        print(f"[spacesharks-desk] Ollama probe failed: {e}", flush=True)
 
     threading.Thread(target=assessment_loop, daemon=True).start()
     threading.Thread(target=copilot_loop, daemon=True).start()

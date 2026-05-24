@@ -12,6 +12,9 @@
   // ------------------------------------------------------------------
   const els = {
     clock: $("clock"),
+    inferBadge: $("infer-badge"), inferMode: $("infer-mode"), inferSub: $("infer-sub"),
+    agentSub: $("agent-sub"),
+    gpuName: $("gpu-name"), gpuUtil: $("gpu-util"), gpuMem: $("gpu-mem"),
     tokenBar: $("token-bar"), tokenSpent: $("token-spent"),
     tokenQuota: $("token-quota"), tokenPct: $("token-pct"), tokenRate: $("token-rate"),
     fhGreen: $("fh-green"), fhYellow: $("fh-yellow"), fhRed: $("fh-red"), fhBlack: $("fh-black"),
@@ -35,8 +38,8 @@
     logBody: $("log-body"), logCount: $("log-count"),
     alertsBody: $("alerts-body"), alertCount: $("alert-count"),
     fleetBody: $("fleet-body"),
-    termOut: $("term-output"), termInput: $("term-input"), termForm: $("term-form"),
   };
+  const LOG_CAP = 6;
 
   // ------------------------------------------------------------------
   // State
@@ -272,7 +275,7 @@
   function pushCopilot(e) {
     const div = document.createElement("div");
     div.className = `cop-entry ${e.who}`;
-    const who = e.who === "user" ? (e.who_label || "S. Chen") : "NEMOCLAW";
+    const who = e.who === "user" ? (e.who_label || "Sampras") : "AI AGENT";
     let meta = "";
     if (e.recommendation) meta += `<div class="cop-meta">RECOMMEND <b>${e.recommendation}</b></div>`;
     if (e.action)         meta += `<div class="cop-meta">ACTION <b>${e.action}</b></div>`;
@@ -402,7 +405,7 @@
     li.innerHTML = `<span class="ts">${ts}</span>` +
                    `<span><b>${health}</b> ${escapeHtml(sat ? sat.name : satId)} ${transition ? "· " + escapeHtml(transition) : ""}</span>`;
     els.logBody.prepend(li);
-    while (els.logBody.children.length > 100) els.logBody.removeChild(els.logBody.lastChild);
+    while (els.logBody.children.length > LOG_CAP) els.logBody.removeChild(els.logBody.lastChild);
     els.logCount.textContent = STATE.logCount + " entries";
   }
   let alertN = 0;
@@ -439,6 +442,7 @@
     if (s.fleet_health) renderFleetHealth(s.fleet_health);
     if (s.weather) renderWeather(s.weather);
     if (s.tokens) renderTokens(s.tokens);
+    if (s.inference) renderInference(s.inference);
     buildSats(STATE.sats);
     renderFleetTable();
     if (STATE.focused) {
@@ -458,6 +462,7 @@
     if (m.fleet_health) renderFleetHealth(m.fleet_health);
     if (m.weather) renderWeather(m.weather);
     if (m.tokens) renderTokens(m.tokens);
+    if (m.inference) renderInference(m.inference);
     STATE.sats = m.sats || STATE.sats;
     STATE.focused = m.focused || STATE.focused;
     // update sat health classes without rebuilding
@@ -497,6 +502,7 @@
         case "copilot":      pushCopilot(m.entry); break;
         case "alert":        pushAlert(m.alert); break;
         case "tokens":       renderTokens(m.tokens); break;
+        case "inference":    renderInference(m.inference); break;
       }
     };
     es.onerror = () => {
@@ -506,29 +512,47 @@
   }
 
   // ------------------------------------------------------------------
-  // Terminal
+  // Inference badge + GPU readout
   // ------------------------------------------------------------------
-  function appendTerm(text, klass) {
-    const span = document.createElement("span");
-    if (klass) span.className = klass;
-    span.textContent = text;
-    els.termOut.appendChild(span);
-    els.termOut.scrollTop = els.termOut.scrollHeight;
+  function renderInference(inf) {
+    if (!inf) return;
+    const live = inf.mode === "LIVE-OLLAMA";
+    els.inferBadge.classList.toggle("live", live);
+    els.inferMode.textContent = inf.mode;
+    if (live) {
+      els.inferSub.textContent =
+        `${inf.live_model} · ${inf.last_call_ms || "?"} ms · ${inf.live_calls} calls`;
+      els.agentSub.textContent = `[ ${inf.live_model} · LIVE ]`;
+    } else {
+      els.inferSub.textContent = "no real inference — click to probe Ollama";
+      els.agentSub.textContent = "[ SIM-MODE — click badge to go LIVE ]";
+    }
+    if (inf.host_gpu) {
+      els.gpuName.textContent = inf.host_gpu.name;
+      els.gpuUtil.textContent = inf.host_gpu.util_pct + "%";
+      els.gpuMem.textContent  = `${inf.host_gpu.mem_used_mib}/${inf.host_gpu.mem_total_mib} MiB`;
+    } else {
+      els.gpuName.textContent = "n/a";
+      els.gpuUtil.textContent = "—";
+      els.gpuMem.textContent  = "—";
+    }
   }
-  els.termForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const cmd = els.termInput.value;
-    if (!cmd.trim()) return;
-    els.termInput.value = "";
-    appendTerm(`root@spaceshark:~$ ${cmd}\n`, "echo");
+  els.inferBadge.addEventListener("click", async () => {
+    els.inferSub.textContent = "probing Ollama…";
     try {
-      const r = await fetch("/api/exec", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cmd }),
-      }).then(r => r.json());
-      if (r.output === "__CLEAR__") els.termOut.textContent = "";
-      else if (r.output) appendTerm(r.output + "\n");
-    } catch (err) { appendTerm(String(err) + "\n"); }
+      const r = await fetch("/api/probe-ollama", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+        .then(r => r.json());
+      if (!r.ok) {
+        els.inferSub.textContent = `${r.reason || "probe failed"}${r.available ? " — try: " + r.available.slice(0,3).join(", ") : ""}`;
+        return;
+      }
+      // success — server will push an `inference` SSE event, but update immediately too
+      els.inferBadge.classList.add("live");
+      els.inferMode.textContent = "LIVE-OLLAMA";
+      els.inferSub.textContent = `${r.model} · ${r.ms} ms · "${(r.response || "").slice(0, 40)}"`;
+    } catch (err) {
+      els.inferSub.textContent = "probe error: " + err;
+    }
   });
 
   // ------------------------------------------------------------------

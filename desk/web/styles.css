@@ -58,6 +58,27 @@ body {
 .brand-title em { color: var(--ink-dim); font-style: normal; font-weight: 500; letter-spacing: 0.18em; }
 .brand-sub { font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.10em; margin-top: 2px; }
 .brand-sub .sep { color: var(--border); margin: 0 6px; }
+
+/* Inference-mode badge — always declares whether real model inference is on. */
+.infer-badge {
+  margin-left: 18px; padding: 4px 10px;
+  border: 1px solid var(--bad);
+  background: rgba(255,100,112,0.08);
+  cursor: pointer;
+  display: inline-flex; flex-direction: column; line-height: 1.15;
+  user-select: none;
+}
+.infer-badge:hover { background: rgba(255,100,112,0.15); }
+.infer-badge.live  {
+  border-color: var(--accent); background: rgba(61,240,200,0.10);
+}
+.infer-mode {
+  font-weight: 700; letter-spacing: 0.16em; font-size: 11px;
+  color: var(--bad);
+}
+.infer-badge.live .infer-mode { color: var(--accent); }
+.infer-sub { color: var(--ink-faint); font-size: 9.5px; letter-spacing: 0.06em; }
+
 .ops-strip { display: flex; align-items: center; gap: 22px; }
 .meter-label {
   display: block; font-size: 9.5px; letter-spacing: 0.18em;
@@ -351,7 +372,7 @@ body {
 .drawer:not(.collapsed) .drawer-arrow { transform: rotate(180deg); }
 .drawer-body { padding: 10px; max-height: 40vh; overflow: hidden; }
 .drawer-grid {
-  display: grid; grid-template-columns: 1.2fr 1fr 1.4fr 1.2fr; gap: 10px;
+  display: grid; grid-template-columns: 1fr 1fr 1.4fr; gap: 10px;
   height: 36vh;
 }
 .drawer-grid .panel { padding: 6px 8px 8px; }

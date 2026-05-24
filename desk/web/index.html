@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Spaceshark Mission Desk</title>
+<title>Spaceshark</title>
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -13,14 +13,18 @@
   <div class="brand">
     <span class="brand-mark">◣</span>
     <div class="brand-stack">
-      <div class="brand-title">SPACESHARK <em>MISSION DESK</em></div>
+      <div class="brand-title">SPACESHARK</div>
       <div class="brand-sub">OPERATIONAL OVERVIEW <span class="sep">|</span>
         <span id="clock">--</span></div>
     </div>
+    <div class="infer-badge" id="infer-badge" title="Click to probe local Ollama / RTX 5070">
+      <span class="infer-mode" id="infer-mode">SIM-MODE</span>
+      <span class="infer-sub"  id="infer-sub">no real inference — click to probe Ollama</span>
+    </div>
   </div>
   <div class="ops-strip">
-    <div class="ops-meter" title="Nimble Cloud daily token usage">
-      <span class="meter-label">NIMBLE CLOUD</span>
+    <div class="ops-meter" title="AI AGENT daily token usage (Nimble Cloud cap)">
+      <span class="meter-label">AI AGENT</span>
       <div class="meter">
         <i id="token-bar" class="meter-fill"></i>
         <span class="meter-tick" style="left:25%"></span>
@@ -40,8 +44,9 @@
       </div>
     </div>
     <div class="ops-director">
-      <span class="dir-line">FLIGHT DIRECTOR <b>S. Chen</b></span>
+      <span class="dir-line">FLIGHT DIRECTOR <b>Sampras</b></span>
       <span class="dir-line">FOCUS <b id="focus-name">--</b> · HEALTH <b id="focus-health">--</b></span>
+      <span class="dir-line" id="gpu-line">GPU <b id="gpu-name">—</b> · UTIL <b id="gpu-util">—</b> · MEM <b id="gpu-mem">—</b></span>
     </div>
   </div>
 </header>
@@ -52,7 +57,7 @@
   <!-- =========== LEFT: TRUST STACK =========== -->
   <section class="panel panel-trust">
     <header>
-      <span class="panel-title">NEMOCLAW TRUST STACK</span>
+      <span class="panel-title">AI AGENT · TRUST STACK</span>
       <span class="panel-sub">multi-model ensemble · 5 specialists</span>
     </header>
     <div class="trust-consensus">
@@ -133,11 +138,11 @@
     </div>
   </section>
 
-  <!-- =========== RIGHT: AI COPILOT =========== -->
+  <!-- =========== RIGHT: AI AGENT =========== -->
   <section class="panel panel-copilot">
     <header>
-      <span class="panel-title">AI COPILOT</span>
-      <span class="panel-sub">[ NEMOCLAW ]</span>
+      <span class="panel-title">AI AGENT</span>
+      <span class="panel-sub" id="agent-sub">[ SIM-MODE ]</span>
     </header>
     <div class="copilot-stream" id="copilot-stream"></div>
     <div class="copilot-foot">
@@ -214,7 +219,7 @@
 <!-- ====================== DRAWER (collapsible secondary) ====================== -->
 <aside class="drawer collapsed" id="drawer">
   <button class="drawer-toggle" id="drawer-toggle">
-    <span class="drawer-arrow">▾</span> SECONDARY PANELS · log · alerts · terminal · fleet table
+    <span class="drawer-arrow">▾</span> SECONDARY PANELS · log · alerts · fleet table
   </button>
   <div class="drawer-body">
     <div class="drawer-grid">
@@ -231,18 +236,6 @@
         <table class="fleet"><thead>
           <tr><th>HEALTH</th><th>NAME</th><th>REGIME</th><th>AGE/LIFE</th><th>TID%</th><th>SCORE</th></tr>
         </thead><tbody id="fleet-body"></tbody></table>
-      </section>
-      <section class="panel">
-        <header><span class="panel-title">TERMINAL</span><span class="panel-sub">type <code>help</code></span></header>
-        <div class="term">
-          <pre id="term-output">root@spaceshark:~$ status
-(loading…)
-</pre>
-          <form id="term-form">
-            <span class="prompt">root@spaceshark:~$</span>
-            <input id="term-input" autocomplete="off" spellcheck="false"/>
-          </form>
-        </div>
       </section>
     </div>
   </div>
