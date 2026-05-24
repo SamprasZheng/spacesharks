@@ -22,6 +22,7 @@
     trustSvg: $("trust-svg"), trustPct: $("trust-pct"),
     trustTarget: $("trust-target"), trustFinal: $("trust-final"),
     wxGrid: $("wx-grid"),
+    lineupTbl: $("lineup-tbl"),
     earth: $("earth"), stars: $("stars"),
     continents: $("continents"), graticule: $("graticule"),
     satLayer: $("sat-layer"), focusOverlay: $("focus-overlay"),
@@ -237,23 +238,27 @@
     els.trustFinal.style.borderColor = HEALTH_COLOR[a.consensus_label];
     // build branching tree
     const W = 280, H = 220;
-    const leftX = 25, rightX = 235;
+    const leftX = 25, rightX = 245;
     const reqY = H / 2;
-    const n = a.votes.length;
+    const votes = a.votes.slice(0, 6);
+    const n = votes.length;
     const lines = [];
     // request node
     lines.push(`<g class="trust-node"><circle cx="${leftX}" cy="${reqY}" r="14"/>` +
                `<text x="${leftX}" y="${reqY + 3}" text-anchor="middle">REQ</text></g>`);
-    a.votes.forEach((v, i) => {
-      const y = 30 + i * ((H - 60) / (n - 1));
-      // edge
+    votes.forEach((v, i) => {
+      const y = 22 + i * ((H - 44) / Math.max(1, n - 1));
+      const liveTag = v.live ? "★" : "";
+      const labelChar = (v.label || "?")[0];
+      const tagText = (v.vendor || v.family || "").slice(0, 12);
+      const idText  = (v.model || "").slice(0, 22);
       lines.push(`<path class="trust-edge ${v.label === "GREEN" ? "" : "dim"}" ` +
-                 `d="M${leftX + 14},${reqY} C${(leftX + rightX) / 2},${reqY} ${(leftX + rightX) / 2},${y} ${rightX - 28},${y}"/>`);
-      // node
-      lines.push(`<g class="trust-node vote-${v.label}">` +
-                 `<circle cx="${rightX - 14}" cy="${y}" r="9"/>` +
-                 `<text x="${rightX - 14}" y="${y + 2}" text-anchor="middle">${v.label[0]}</text>` +
-                 `<text class="tag" x="${rightX - 30}" y="${y + 3}" text-anchor="end">${v.model}</text>` +
+                 `d="M${leftX + 14},${reqY} C${(leftX + rightX) / 2},${reqY} ${(leftX + rightX) / 2},${y} ${rightX - 24},${y}"/>`);
+      lines.push(`<g class="trust-node vote-${v.label} ${v.live ? "live" : ""}">` +
+                 `<circle cx="${rightX - 12}" cy="${y}" r="9"/>` +
+                 `<text x="${rightX - 12}" y="${y + 2}" text-anchor="middle">${labelChar}</text>` +
+                 `<text class="id"  x="${rightX - 26}" y="${y - 2}" text-anchor="end">${idText} ${liveTag}</text>` +
+                 `<text class="tag" x="${rightX - 26}" y="${y + 8}" text-anchor="end">${tagText}${v.ms ? " · " + v.ms + "ms" : ""}</text>` +
                  `</g>`);
     });
     els.trustSvg.innerHTML = lines.join("");
@@ -519,12 +524,15 @@
     const live = inf.mode === "LIVE-OLLAMA";
     els.inferBadge.classList.toggle("live", live);
     els.inferMode.textContent = inf.mode;
+    const lineup = inf.lineup || [];
+    const alive = lineup.filter(m => m.alive && m.loaded);
     if (live) {
+      const ms = inf.last_lineup_call_ms;
       els.inferSub.textContent =
-        `${inf.live_model} · ${inf.last_call_ms || "?"} ms · ${inf.live_calls} calls`;
-      els.agentSub.textContent = `[ ${inf.live_model} · LIVE ]`;
+        `${alive.length}/${lineup.length} models alive · lineup tick ${ms ? ms + " ms" : "—"} · ${inf.live_calls} calls`;
+      els.agentSub.textContent = `[ ${alive.length} model${alive.length === 1 ? "" : "s"} LIVE ]`;
     } else {
-      els.inferSub.textContent = "no real inference — click to probe Ollama";
+      els.inferSub.textContent = `${inf.available_models?.length || 0} ollama models reachable — click to go LIVE`;
       els.agentSub.textContent = "[ SIM-MODE — click badge to go LIVE ]";
     }
     if (inf.host_gpu) {
@@ -536,6 +544,32 @@
       els.gpuUtil.textContent = "—";
       els.gpuMem.textContent  = "—";
     }
+    renderLineup(inf);
+  }
+
+  function renderLineup(inf) {
+    if (!els.lineupTbl) return;
+    const rows = [];
+    const fmt = (m) => {
+      let state, klass;
+      if (!m.loaded)      { state = "not pulled"; klass = "miss"; }
+      else if (!m.alive)  { state = "DEAD";       klass = "dead"; }
+      else if (m.replaced_by) { state = "→ " + m.replaced_by; klass = "swapped"; }
+      else                { state = m.last_label || "ALIVE"; klass = "alive"; }
+      const swap = m.replaced_by ? ` <span class="ln-vendor">(swapped → ${m.replaced_by})</span>` : "";
+      const ms = m.last_call_ms ? ` ${m.last_call_ms}ms` : "";
+      return `<tr class="ln-role-${m.role} ${m.alive ? "" : "dead"}">
+        <td><span class="ln-dot" style="background:${m.loaded ? (m.alive ? "var(--accent)" : "var(--bad)") : "var(--ink-faint)"}"></span>
+            <span class="ln-id">${escapeHtml(m.id)}</span>${swap}</td>
+        <td class="ln-vendor">${escapeHtml(m.vendor)}${ms}</td>
+        <td class="ln-state ${klass}">${escapeHtml(state)}</td>
+      </tr>`;
+    };
+    rows.push(`<tr class="lineup-section"><td colspan="3">PRIMARY ${(inf.primary || []).filter(m => m.alive && m.loaded).length}/${(inf.primary || []).length}</td></tr>`);
+    (inf.primary || []).forEach(m => rows.push(fmt(m)));
+    rows.push(`<tr class="lineup-section"><td colspan="3">BACKUP ${(inf.backup || []).filter(m => m.alive && m.loaded).length}/${(inf.backup || []).length}</td></tr>`);
+    (inf.backup || []).forEach(m => rows.push(fmt(m)));
+    els.lineupTbl.querySelector("tbody").innerHTML = rows.join("");
   }
   els.inferBadge.addEventListener("click", async () => {
     els.inferSub.textContent = "probing Ollama…";

@@ -203,6 +203,25 @@ body {
 .wx-grid span { color: var(--ink-dim); }
 .wx-grid b { color: var(--ink); }
 
+.lineup-tbl { width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 4px; }
+.lineup-tbl td { padding: 2px 3px; border-bottom: 1px dashed rgba(31,111,138,0.15); }
+.lineup-tbl .ln-dot { width: 7px; height: 7px; border-radius: 999px; display: inline-block; margin-right: 4px; }
+.lineup-tbl .ln-id { color: var(--ink); font-weight: 600; }
+.lineup-tbl .ln-vendor { color: var(--ink-faint); }
+.lineup-tbl .ln-state { text-align: right; font-weight: 700; letter-spacing: 0.04em; }
+.lineup-tbl .ln-state.alive   { color: var(--accent); }
+.lineup-tbl .ln-state.swapped { color: var(--warn); }
+.lineup-tbl .ln-state.dead    { color: var(--bad); }
+.lineup-tbl .ln-state.miss    { color: var(--ink-faint); }
+.lineup-tbl .ln-role-PRIMARY  { color: var(--ink); }
+.lineup-tbl .ln-role-BACKUP   { color: var(--ink-faint); font-style: italic; }
+.lineup-tbl tr.dead .ln-id    { color: var(--ink-faint); text-decoration: line-through; }
+.lineup-section td { padding-top: 6px; color: var(--ink-faint); font-size: 9px; letter-spacing: 0.06em; }
+
+.trust-node text.id  { fill: var(--ink); font-size: 8px; }
+.trust-node text.tag { fill: var(--ink-faint); font-size: 7.5px; }
+.trust-node.live circle { stroke-width: 1.8; }
+
 /* ================== EARTH ================== */
 .panel-earth { padding-bottom: 4px; }
 .earth-wrap { flex: 1; min-height: 0; position: relative; }

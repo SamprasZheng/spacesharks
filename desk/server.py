@@ -218,19 +218,105 @@ TOKEN_USAGE = {
 # score. The top-bar badge always declares which mode is hot.
 # ============================================================================
 
+def _mk_model(model_id, vendor, family, role, est_size_gb):
+    return {
+        "id": model_id, "vendor": vendor, "family": family, "role": role,
+        "est_size_gb": est_size_gb,
+        "alive": True, "last_call_ms": None,
+        "success": 0, "fail": 0, "consecutive_fail": 0,
+        "last_label": None, "last_thinking": None,
+        "replaced_by": None,                # backup model id if rotated out
+    }
+
+
+# Primary voters: one per vendor (NVIDIA fills one slot; backups can swap).
+# Sizes shown are Q4_K_M approximations — exact may vary by tag.
+PRIMARY_MODELS = [
+    _mk_model("nemotron-3-nano:4b", "NVIDIA",    "Nemotron-3",   "PRIMARY", 2.8),
+    _mk_model("qwen3:4b",           "Alibaba",   "Qwen-3",       "PRIMARY", 2.5),
+    _mk_model("llama3.2:3b",        "Meta",      "Llama-3.2",    "PRIMARY", 2.0),
+    _mk_model("phi3.5",             "Microsoft", "Phi-3.5-mini", "PRIMARY", 2.3),
+    _mk_model("gemma2:2b",          "Google",    "Gemma-2",      "PRIMARY", 1.6),
+]
+BACKUP_MODELS = [
+    _mk_model("mistral:7b",         "Mistral AI","Mistral-7B",   "BACKUP",  4.1),
+    _mk_model("deepseek-r1:7b",     "DeepSeek",  "DeepSeek-R1",  "BACKUP",  4.7),
+    _mk_model("granite3-dense:2b",  "IBM",       "Granite-3",    "BACKUP",  1.5),
+]
+
+CONSECUTIVE_FAIL_THRESHOLD = 3  # trip-and-replace after N failures in a row
+
+
 INFERENCE = {
     "mode": "SIM",                # "SIM" | "LIVE-OLLAMA"
     "ollama_url": os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
-    "live_model": os.environ.get("OLLAMA_MODEL", "nemotron-3-nano:4b"),
-    "fallback_models": ["qwen2.5:7b", "llama3.1:8b"],
     "available_models": [],
     "last_probe_ts": 0.0,
-    "last_call_ms": None,
     "live_calls": 0,
     "live_failures": 0,
-    "last_response": None,
     "host_gpu": None,             # populated when nvidia-smi is reachable
+    "last_assess_ts": None,
+    "last_lineup_call_ms": None,  # sum of latencies across the lineup last tick
 }
+
+
+def _is_available(model_id: str) -> bool:
+    """Match `phi3.5` against `phi3.5:latest` and other implicit-:latest tags."""
+    if model_id in INFERENCE["available_models"]:
+        return True
+    if (model_id + ":latest") in INFERENCE["available_models"]:
+        return True
+    return False
+
+
+def _resolve_id(model_id: str) -> str:
+    """Returns the actual on-disk model name to send to /api/chat."""
+    if model_id in INFERENCE["available_models"]:
+        return model_id
+    if (model_id + ":latest") in INFERENCE["available_models"]:
+        return model_id + ":latest"
+    return model_id
+
+
+def lineup_alive() -> list[dict]:
+    """Return the current 5-voter lineup, replacing any tripped primary with a
+    backup. Each tripped slot is filled with the first available backup that
+    isn't already in the lineup, in declaration order."""
+    out = []
+    used = set()
+    backup_idx = 0
+    for p in PRIMARY_MODELS:
+        if p["alive"] and _is_available(p["id"]):
+            out.append(p); used.add(p["id"]); continue
+        # find a replacement
+        replacement = None
+        while backup_idx < len(BACKUP_MODELS):
+            b = BACKUP_MODELS[backup_idx]
+            backup_idx += 1
+            if b["id"] in used: continue
+            if not _is_available(b["id"]): continue
+            if not b["alive"]: continue
+            replacement = b; used.add(b["id"])
+            break
+        if replacement:
+            p["replaced_by"] = replacement["id"]
+            out.append(replacement)
+        else:
+            out.append(p)
+    return out
+
+
+def model_view(m: dict) -> dict:
+    return {
+        "id": m["id"], "vendor": m["vendor"], "family": m["family"],
+        "role": m["role"], "alive": m["alive"],
+        "est_size_gb": m["est_size_gb"],
+        "last_call_ms": m["last_call_ms"], "last_label": m["last_label"],
+        "success": m["success"], "fail": m["fail"],
+        "consecutive_fail": m["consecutive_fail"],
+        "replaced_by": m["replaced_by"],
+        "loaded": _is_available(m["id"]),
+    }
 
 
 def _http_get(url: str, timeout: float = 2.5) -> dict | None:
@@ -257,8 +343,9 @@ def _http_post(url: str, body: dict, timeout: float = 12.0) -> tuple[dict | None
 
 
 def probe_ollama() -> dict:
-    """Hit Ollama's `/api/tags`. If reachable + a usable model is available,
-    flip INFERENCE['mode'] to LIVE-OLLAMA. Returns a status payload for the UI.
+    """Hit Ollama's `/api/tags`. If reachable, refresh INFERENCE['available_models']
+    so the lineup logic can decide who's alive. Does a tiny warm-up call against
+    the first reachable lineup member so the GPU is actually exercised.
     """
     INFERENCE["last_probe_ts"] = time.time()
     tags = _http_get(INFERENCE["ollama_url"].rstrip("/") + "/api/tags")
@@ -269,18 +356,24 @@ def probe_ollama() -> dict:
 
     models = [m["name"] for m in tags.get("models", [])]
     INFERENCE["available_models"] = models
+    # Mark which lineup entries are present (tolerant of bare-tag vs :latest)
+    for m in PRIMARY_MODELS + BACKUP_MODELS:
+        if _is_available(m["id"]):
+            m["alive"] = True
+            m["consecutive_fail"] = 0
+        else:
+            m["alive"] = False
+            m["consecutive_fail"] = CONSECUTIVE_FAIL_THRESHOLD
 
-    candidates = [INFERENCE["live_model"]] + INFERENCE["fallback_models"]
-    chosen = next((c for c in candidates if c in models), None)
+    lineup = lineup_alive()
+    chosen = next((m for m in lineup if m["id"] in models and m["alive"]), None)
     if chosen is None:
         INFERENCE["mode"] = "SIM"
-        return {"ok": False, "reason": "no compatible model loaded", "available": models}
+        return {"ok": False, "reason": "no lineup model available", "available": models,
+                "lineup": [model_view(m) for m in lineup]}
 
-    INFERENCE["live_model"] = chosen
-
-    # Real test call so the GPU actually wakes up.
     body = {
-        "model": chosen,
+        "model": _resolve_id(chosen["id"]),
         "messages": [
             {"role": "system", "content": "You are a satellite health classifier. Reply with one word only from {GREEN, YELLOW, RED, BLACK}."},
             {"role": "user",   "content": "Smoke test — output GREEN."},
@@ -289,34 +382,30 @@ def probe_ollama() -> dict:
         "options": {"temperature": 0.0, "num_predict": 64},
     }
     resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body)
-    INFERENCE["last_call_ms"] = round(ms, 1)
+    chosen["last_call_ms"] = round(ms, 1)
     if resp is None:
         INFERENCE["mode"] = "SIM"
         INFERENCE["live_failures"] += 1
-        return {"ok": False, "reason": "chat call failed", "model": chosen, "ms": INFERENCE["last_call_ms"]}
+        chosen["fail"] += 1; chosen["consecutive_fail"] += 1
+        return {"ok": False, "reason": "chat call failed", "model": chosen["id"], "ms": chosen["last_call_ms"]}
 
-    INFERENCE["last_response"] = (resp.get("message") or {}).get("content", "")[:200]
     INFERENCE["mode"] = "LIVE-OLLAMA"
     INFERENCE["live_calls"] += 1
+    chosen["success"] += 1; chosen["consecutive_fail"] = 0
+    msg = (resp.get("message") or {})
+    response_text = (msg.get("content") or msg.get("thinking") or "")[:200]
     return {
         "ok": True,
-        "model": chosen,
-        "ms": INFERENCE["last_call_ms"],
-        "response": INFERENCE["last_response"],
+        "model": chosen["id"],
+        "ms": chosen["last_call_ms"],
+        "response": response_text,
         "available": models,
+        "lineup": [model_view(m) for m in lineup_alive()],
     }
 
 
-def live_assessor_call(sat: dict, wx: dict, prompt_only: bool = False) -> dict | None:
-    """One round trip per sat to the local model. Returns parsed result or None.
-
-    The model is asked to grade health on a four-state scale. The output is
-    parsed permissively — if parsing fails we still record the latency so the
-    user can confirm a real GPU call happened.
-    """
-    if INFERENCE["mode"] != "LIVE-OLLAMA":
-        return None
-    prompt = (
+def _health_prompt(sat: dict, wx: dict) -> str:
+    return (
         f"Satellite {sat['name']} ({sat['regime']}, op {sat['operator']}). "
         f"Age {sat_age_years(sat):.1f}y of {sat['design_life_years']}y design life. "
         f"TID {sat['tid_accumulated_krad']:.1f}/{sat['tid_budget_krad']:.0f} krad. "
@@ -324,8 +413,14 @@ def live_assessor_call(sat: dict, wx: dict, prompt_only: bool = False) -> dict |
         f"Weather: Kp {wx['kp']}, X-ray {wx['xray_class']}, SEP {wx['sep_pfu']} pfu. "
         f"Output ONLY one word from {{GREEN, YELLOW, RED, BLACK}} — the operational health."
     )
+
+
+def _model_ask(model: dict, prompt: str, timeout: float = 15.0) -> dict | None:
+    """One Ollama call against a specific model. Updates model bookkeeping
+    (success / fail / latency / consecutive_fail). Returns parsed label or None.
+    """
     body = {
-        "model": INFERENCE["live_model"],
+        "model": _resolve_id(model["id"]),
         "messages": [
             {"role": "system", "content": "You are a spacecraft operations health classifier. Reply with one word only from {GREEN, YELLOW, RED, BLACK}."},
             {"role": "user",   "content": prompt},
@@ -333,23 +428,55 @@ def live_assessor_call(sat: dict, wx: dict, prompt_only: bool = False) -> dict |
         "stream": False,
         "options": {"temperature": 0.0, "num_predict": 256},
     }
-    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=15.0)
-    INFERENCE["last_call_ms"] = round(ms, 1)
+    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=timeout)
+    model["last_call_ms"] = round(ms, 1)
     if resp is None:
+        model["fail"] += 1
+        model["consecutive_fail"] += 1
         INFERENCE["live_failures"] += 1
+        if model["consecutive_fail"] >= CONSECUTIVE_FAIL_THRESHOLD and model["alive"]:
+            model["alive"] = False
+            BUS.alert("HIGH", f"model {model['id']} marked DEAD after {model['fail']} failures — swapping to backup", None)
+            BUS.copilot("nemoclaw", f"Model {model['id']} ({model['vendor']}) failed too often; rotating to backup.")
         return None
     INFERENCE["live_calls"] += 1
+    model["success"] += 1
+    model["consecutive_fail"] = 0
     msg = resp.get("message") or {}
     content = (msg.get("content") or "").strip()
     thinking = (msg.get("thinking") or "").strip()
-    # Nemotron-3-nano is a thinking model — answer lands in `content`, the
-    # reasoning trail lands in `thinking`. Fall back to `thinking` if Ollama
-    # routed the answer there for any reason.
     haystack = (content + " " + thinking).upper()
     label = next((k for k in ("BLACK", "RED", "YELLOW", "GREEN") if k in haystack), None)
-    INFERENCE["last_response"] = (content or thinking)[:160]
-    INFERENCE["last_thinking"] = thinking[:240] if thinking else None
-    return {"label": label, "raw": content, "thinking": thinking, "ms": INFERENCE["last_call_ms"]}
+    model["last_label"] = label or "?"
+    model["last_thinking"] = thinking[:160] if thinking else None
+    return {"label": label, "content": content, "thinking": thinking, "ms": model["last_call_ms"]}
+
+
+def live_lineup_vote(sat: dict, wx: dict) -> list[dict] | None:
+    """Ask every model in the current lineup. Returns a list of vote dicts or
+    None if mode isn't live. Dead/missing models are simply skipped (their
+    placeholder still appears in the snapshot view)."""
+    if INFERENCE["mode"] != "LIVE-OLLAMA":
+        return None
+    prompt = _health_prompt(sat, wx)
+    lineup = lineup_alive()
+    votes: list[dict] = []
+    t_lineup = 0.0
+    for m in lineup:
+        if not (m["alive"] and _is_available(m["id"])):
+            continue
+        result = _model_ask(m, prompt)
+        t_lineup += m["last_call_ms"] or 0.0
+        if result and result["label"]:
+            votes.append({
+                "model": m["id"], "vendor": m["vendor"], "family": m["family"],
+                "label": result["label"], "ms": m["last_call_ms"],
+                "live": True,
+                "score": {"GREEN": 0.2, "YELLOW": 0.6, "RED": 0.9, "BLACK": 1.2}[result["label"]],
+            })
+    INFERENCE["last_lineup_call_ms"] = round(t_lineup, 1)
+    INFERENCE["last_assess_ts"] = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
+    return votes
 
 
 def host_gpu_snapshot() -> dict | None:
@@ -378,14 +505,15 @@ def inference_view() -> dict:
     return {
         "mode": INFERENCE["mode"],
         "ollama_url": INFERENCE["ollama_url"],
-        "live_model": INFERENCE["live_model"],
         "available_models": INFERENCE["available_models"],
         "live_calls": INFERENCE["live_calls"],
         "live_failures": INFERENCE["live_failures"],
-        "last_call_ms": INFERENCE["last_call_ms"],
-        "last_response": INFERENCE["last_response"],
-        "last_thinking": INFERENCE.get("last_thinking"),
         "host_gpu": INFERENCE["host_gpu"],
+        "last_assess_ts": INFERENCE.get("last_assess_ts"),
+        "last_lineup_call_ms": INFERENCE.get("last_lineup_call_ms"),
+        "lineup": [model_view(m) for m in lineup_alive()],
+        "primary": [model_view(m) for m in PRIMARY_MODELS],
+        "backup":  [model_view(m) for m in BACKUP_MODELS],
     }
 
 
@@ -448,30 +576,21 @@ def assess_sat(sat: dict, wx: dict) -> dict:
     """Run every assessor, take the median label, return assessment dossier."""
     votes = []
     scores = []
-    # If live mode is on, the real model contributes one vote with the highest
-    # weight; the other "assessor" rows remain as their stylised cohort so the
-    # tree visualisation stays populated. Failure falls back to SIM cleanly.
-    live_label = None
-    if INFERENCE["mode"] == "LIVE-OLLAMA":
-        live = live_assessor_call(sat, wx)
-        if live and live["label"]:
-            live_label = live["label"]
-            votes.append({
-                "model": INFERENCE["live_model"],
-                "family": "ollama-local-GPU",
-                "label": live_label,
-                "score": {"GREEN": 0.2, "YELLOW": 0.6, "RED": 0.9, "BLACK": 1.2}[live_label],
-                "live": True,
-                "ms": live["ms"],
-            })
-            scores.append(votes[-1]["score"])
-    for m in ASSESSORS:
-        label, sc = assessor_vote(m, sat, wx)
-        votes.append({"model": m["id"], "family": m["family"], "label": label, "score": round(sc, 3)})
-        scores.append(sc)
-        TOKEN_USAGE["by_model"][m["id"]] += m["tokens_per_call"]
-        TOKEN_USAGE["spent"] += m["tokens_per_call"]
-        TOKEN_USAGE["calls"] += 1
+    # In LIVE mode the five real models in the lineup vote. SIM mode falls
+    # back to the deterministic stylised cohort below (kept around as backup
+    # for visualisation when nothing's loaded yet).
+    live_votes = live_lineup_vote(sat, wx) if INFERENCE["mode"] == "LIVE-OLLAMA" else None
+    if live_votes:
+        votes.extend(live_votes)
+        scores.extend(v["score"] for v in live_votes)
+    else:
+        for m in ASSESSORS:
+            label, sc = assessor_vote(m, sat, wx)
+            votes.append({"model": m["id"], "family": m["family"], "label": label, "score": round(sc, 3)})
+            scores.append(sc)
+            TOKEN_USAGE["by_model"][m["id"]] += m["tokens_per_call"]
+            TOKEN_USAGE["spent"] += m["tokens_per_call"]
+            TOKEN_USAGE["calls"] += 1
 
     # median label by score
     scores_sorted = sorted(scores)
@@ -703,24 +822,41 @@ def focused_sat_view() -> dict:
 
 
 def assess_focused_snapshot(sat: dict) -> dict:
-    """Like assess_sat but does NOT mutate state or consume tokens.
-    Just for displaying current votes.
+    """Returns a vote snapshot for the focused sat. In LIVE-OLLAMA mode we
+    surface the *last* live vote per lineup model (no synchronous re-call so
+    the panel stays responsive); in SIM mode we use the deterministic cohort.
     """
     wx = WEATHER.snapshot()
     votes = []
     scores = []
-    # use deterministic snapshot (no noise) so the panel doesn't dance
     age, tid, see, wxf = base_factors(sat, wx)
-    for m in ASSESSORS:
-        sc = (
-            m["weight_age"] * age * 0.40
-            + m["weight_tid"] * tid * 0.35
-            + 1.0 * see * 0.10
-            + m["weight_wx"] * wxf * 0.45
-        )
-        label = "BLACK" if sc >= 1.10 else "RED" if sc >= 0.80 else "YELLOW" if sc >= 0.50 else "GREEN"
-        votes.append({"model": m["id"], "family": m["family"], "label": label, "score": round(sc, 3)})
-        scores.append(sc)
+
+    if INFERENCE["mode"] == "LIVE-OLLAMA":
+        for m in lineup_alive():
+            label = m["last_label"] or "—"
+            if label not in ("GREEN", "YELLOW", "RED", "BLACK"):
+                continue
+            sc = {"GREEN": 0.2, "YELLOW": 0.6, "RED": 0.9, "BLACK": 1.2}[label]
+            votes.append({
+                "model": m["id"], "vendor": m["vendor"], "family": m["family"],
+                "label": label, "score": sc,
+                "live": True, "ms": m["last_call_ms"],
+            })
+            scores.append(sc)
+
+    if not votes:
+        # SIM cohort fallback
+        for m in ASSESSORS:
+            sc = (
+                m["weight_age"] * age * 0.40
+                + m["weight_tid"] * tid * 0.35
+                + 1.0 * see * 0.10
+                + m["weight_wx"] * wxf * 0.45
+            )
+            label = "BLACK" if sc >= 1.10 else "RED" if sc >= 0.80 else "YELLOW" if sc >= 0.50 else "GREEN"
+            votes.append({"model": m["id"], "family": m["family"], "label": label, "score": round(sc, 3)})
+            scores.append(sc)
+
     counts: dict[str, int] = {}
     for v in votes:
         counts[v["label"]] = counts.get(v["label"], 0) + 1
@@ -865,6 +1001,35 @@ def token_history_loop() -> None:
         last = TOKEN_USAGE["spent"]
         TOKEN_USAGE["history"].append({"t": int(time.time()), "delta": delta, "spent": TOKEN_USAGE["spent"]})
         BUS.publish({"type": "tokens", "tokens": token_view()})
+
+
+def reprobe_loop() -> None:
+    """Every 20s refresh the available-models list from Ollama. Lets newly
+    pulled models join the lineup live, and resurrects models that come back
+    after temporary failure.
+    """
+    while True:
+        time.sleep(20)
+        tags = _http_get(INFERENCE["ollama_url"].rstrip("/") + "/api/tags")
+        if tags is None:
+            continue
+        new_list = [m["name"] for m in tags.get("models", [])]
+        before = set(INFERENCE["available_models"])
+        after = set(new_list)
+        INFERENCE["available_models"] = new_list
+        # Resurrect any lineup model that's now available but currently marked dead
+        for m in PRIMARY_MODELS + BACKUP_MODELS:
+            if m["id"] in after:
+                if not m["alive"] and m["consecutive_fail"] >= CONSECUTIVE_FAIL_THRESHOLD:
+                    # only auto-resurrect on first appearance, not after real failure
+                    pass
+                if m["id"] not in before:
+                    # newly pulled: bring alive
+                    m["alive"] = True
+                    m["consecutive_fail"] = 0
+                    BUS.copilot("nemoclaw",
+                        f"Model {m['id']} ({m['vendor']}) now available — joining lineup.")
+        BUS.publish({"type": "inference", "inference": inference_view()})
 
 
 # ============================================================================
@@ -1126,6 +1291,7 @@ def main() -> None:
     threading.Thread(target=assessment_loop, daemon=True).start()
     threading.Thread(target=copilot_loop, daemon=True).start()
     threading.Thread(target=token_history_loop, daemon=True).start()
+    threading.Thread(target=reprobe_loop, daemon=True).start()
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[spacesharks-desk] http://{args.host}:{args.port}/  (writing {JSONL})", flush=True)
