@@ -54,10 +54,20 @@ DATA.mkdir(exist_ok=True)
 # Sat fleet — the heart of the MVP.
 # ============================================================================
 
+def _orbit_seed(norad: str, salt: int = 0) -> tuple[float, float]:
+    """Deterministic (raan, phase) for a given NORAD id so positions don't
+    jump between server restarts."""
+    h = int(hashlib.sha256(f"{norad}|{salt}".encode()).hexdigest()[:8], 16)
+    raan = (h % 36000) / 100.0           # 0..360 deg
+    phase = ((h >> 16) % 10000) / 10000.0  # 0..1
+    return raan, phase
+
+
 def _sat(norad, name, regime, operator, launched, design_life, mass, incl, alt_km,
          tid_budget=50.0, mission="comms", lifecycle="In-Orbit Operations", shell=None):
+    raan, phase = _orbit_seed(str(norad))
     return {
-        "id": norad,
+        "id": str(norad),
         "name": name,
         "regime": regime,
         "operator": operator,
@@ -66,6 +76,8 @@ def _sat(norad, name, regime, operator, launched, design_life, mass, incl, alt_k
         "mass_kg": mass,
         "inclination_deg": incl,
         "altitude_km": alt_km,
+        "raan_deg": raan,           # right ascension of ascending node
+        "phase":    phase,          # 0..1 along orbit
         "tid_budget_krad": tid_budget,
         "tid_accumulated_krad": tid_budget * random.uniform(0.05, 0.55),
         "see_events_30d": random.randint(0, 3),
@@ -159,16 +171,22 @@ SATS = [
 # inactive / unknown".
 # ============================================================================
 
-def _seed_extra_starlinks(target: int = 1000) -> None:
+def _seed_extra_starlinks(target: int = 100) -> None:
+    """Top the active triage up to `target` total sats by adding Starlinks
+    across the published shells. Spread is intentional so the globe shows
+    global coverage rather than a thick ring at one inclination.
+    """
     if len(SATS) >= target:
         return
     rng = random.Random(2026)
+    # Real-world Starlink shells run multiple orbital planes per inclination,
+    # so RAAN is approximately uniform 0-360°; we draw uniformly.
     shells = [
-        ("v1.0/G1",   53.0, (540, 560),  300, "comms",  300),
-        ("v1.5/G4",   53.2, (540, 570),  300, "comms",  300),
-        ("v2.0-mini", 43.0, (520, 550),  800, "comms",  180),
-        ("DTC",       53.0, (535, 545),  800, "d2c",    100),
-        ("v1.5/G3",   97.6, (560, 580),  300, "comms",  100),
+        ("v1.0/G1",   53.0, (540, 560),  300, "comms",  15),
+        ("v1.5/G4",   53.2, (540, 570),  300, "comms",  15),
+        ("v2.0-mini", 43.0, (520, 550),  800, "comms",  10),
+        ("DTC",       53.0, (535, 545),  800, "d2c",    6),
+        ("v1.5/G3",   97.6, (560, 580),  300, "comms",  7),
     ]
     norad = 60000
     for shell, incl, alt_range, mass, mission, count in shells:
@@ -184,8 +202,12 @@ def _seed_extra_starlinks(target: int = 1000) -> None:
                 f"{launched_year}-{launched_mon:02d}-{launched_day:02d}",
                 design_life=5, mass=mass, mission=mission,
             )
-            # New seeded sats start UNASSESSED — they show grey in the UI
-            # until the assessment loop reaches them.
+            # Spread RAAN explicitly across the available planes for this
+            # shell so 53° sats don't all stack on the same plane.
+            sat["raan_deg"] = round(rng.uniform(0, 360), 2)
+            sat["phase"]    = round(rng.random(), 4)
+            # New seeded sats start UNASSESSED — they show grey until
+            # the assessment loop reaches them.
             sat["health"] = "UNKNOWN"
             sat["score"]  = 0.0
             sat["last_assessed"] = None
@@ -193,7 +215,7 @@ def _seed_extra_starlinks(target: int = 1000) -> None:
             norad += 1
 
 
-_seed_extra_starlinks(target=1000)
+_seed_extra_starlinks(target=100)
 
 
 # ============================================================================
@@ -228,7 +250,7 @@ def _build_visual_catalog(rng_seed: int = 42, target_total: int = 10000) -> list
             alt = rng.uniform(*alt_range)
             inc = incl + rng.uniform(-1.5, 1.5)
             phase = rng.random()
-            ring_jitter = rng.uniform(-0.05, 0.05)
+            raan  = rng.uniform(0, 360)
             regime = ("LEO" if alt < 1500 else "SSO" if alt < 2000 else "MEO" if alt < 30000 else "GEO")
             cat.append({
                 "id": str(norad),
@@ -237,8 +259,8 @@ def _build_visual_catalog(rng_seed: int = 42, target_total: int = 10000) -> list
                 "shell": shell,
                 "inclination_deg": round(inc, 2),
                 "altitude_km": round(alt, 1),
-                "phase": round(phase, 4),         # 0..1, used by the renderer
-                "ring_jitter": round(ring_jitter, 4),
+                "phase":   round(phase, 4),
+                "raan_deg": round(raan, 2),
                 "attention_level": "UNKNOWN",
                 "health": "UNKNOWN",
                 "last_refresh_ts": None,
@@ -1196,6 +1218,9 @@ def public_sat(sat: dict) -> dict:
         "shell": sat.get("shell"),
         "operator": sat["operator"],
         "launched": sat["launched"],
+        "inclination_deg": sat.get("inclination_deg"),
+        "raan_deg":         sat.get("raan_deg", 0.0),
+        "phase":            sat.get("phase",    0.0),
         "age_years": round(age, 2),
         "design_life_years": sat["design_life_years"],
         "design_life_pct": round(100.0 * age / sat["design_life_years"], 1),

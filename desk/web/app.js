@@ -423,75 +423,100 @@
     ];
     els.continents.innerHTML = paths.map(d => `<path d="${d}"/>`).join("");
   }
-  const REGIME_RX  = { LEO: 195, SSO: 215, MEO: 290, GEO: 370 };
-  const REGIME_RY  = { LEO: 60,  SSO: 95,  MEO: 135, GEO: 195 };
+  // ------------------------------------------------------------------
+  // 3D orbit projection — proper ECI → screen so sats spread across the
+  // globe by inclination + RAAN + phase. View is from +Y axis, tilted 25°
+  // up so we see Earth slightly from the equator and orbits read as 3D.
+  // ------------------------------------------------------------------
+  const REGIME_R  = { LEO: 195, SSO: 215, MEO: 290, GEO: 370 };
   const REGIME_SPD = { LEO: 0.14, SSO: 0.10, MEO: 0.04, GEO: 0.014 };
+  const VIEW_TILT = 25 * Math.PI / 180;
+  const COS_TILT = Math.cos(VIEW_TILT);
+  const SIN_TILT = Math.sin(VIEW_TILT);
+  const DEG = Math.PI / 180;
 
-  // Background visual catalog — 10k unassessed objects rendered as a thick
-  // populated band. Each sat carries its own phase + ring_jitter so the
-  // result looks like a 3D shell, not a thin line.
+  function projectOrbit(sat, t = 0, animate = true) {
+    const i = (sat.inclination_deg || 0) * DEG;
+    const raan = (sat.raan_deg || 0) * DEG;
+    const speed = animate ? (REGIME_SPD[sat.regime] || 0.1) : 0;
+    const phi = ((sat.phase || 0) + t * speed) * 2 * Math.PI;
+    const cosO = Math.cos(raan), sinO = Math.sin(raan);
+    const cosI = Math.cos(i),    sinI = Math.sin(i);
+    const cosP = Math.cos(phi),  sinP = Math.sin(phi);
+    // ECI unit-sphere position for the sat's orbit plane
+    const ex = cosO * cosP - sinO * sinP * cosI;
+    const ey = sinO * cosP + cosO * sinP * cosI;
+    const ez = sinP * sinI;
+    // View from +Y, tilted up by VIEW_TILT:
+    //   screen x = ex
+    //   screen y = -ez * cos(tilt) + ey * sin(tilt)
+    //   depth   =  ey * cos(tilt) + ez * sin(tilt)   (front if positive)
+    const sx = ex;
+    const sy = -ez * COS_TILT + ey * SIN_TILT;
+    const depth = ey * COS_TILT + ez * SIN_TILT;
+    const r = REGIME_R[sat.regime] || 200;
+    return {
+      x: CENTER.x + sx * r,
+      y: CENTER.y + sy * r,
+      behind: depth < -0.25,   // approximate Earth occlusion
+      depth: depth,
+    };
+  }
+
+  // Background visual catalog — static (no time component) using the same
+  // projection so it sits on the same 3D shell as the active triage.
   function buildCatalog(catalog) {
     const parts = [];
     catalog.forEach((s) => {
-      const a = (typeof s.phase === "number" ? s.phase : Math.random()) * Math.PI * 2;
-      const rx = (REGIME_RX[s.regime] || 200) * (1 + (s.ring_jitter || 0));
-      const ry = (REGIME_RY[s.regime] || 60)  * (1 + (s.ring_jitter || 0)) * 0.55;
-      const x = (CENTER.x + Math.cos(a) * rx).toFixed(1);
-      const y = (CENTER.y + Math.sin(a) * ry).toFixed(1);
-      // Slight depth dimming for the back half of the ring
-      const back = Math.sin(a) > 0;
-      const cls = back ? "sat-bg sat-bg-back" : "sat-bg";
-      parts.push(`<circle class="${cls}" cx="${x}" cy="${y}" r="1.4"/>`);
+      const p = projectOrbit(s, 0, false);
+      if (p.behind) {
+        parts.push(`<circle class="sat-bg sat-bg-back" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.2"/>`);
+      } else {
+        parts.push(`<circle class="sat-bg" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.4"/>`);
+      }
     });
     els.catalogLayer.innerHTML = parts.join("");
-    if (els.earthCount) els.earthCount.textContent = catalog.length.toLocaleString();
+    if (els.earthCount)  els.earthCount.textContent  = catalog.length.toLocaleString();
     if (els.catalogSize) els.catalogSize.textContent = catalog.length.toLocaleString();
   }
 
-  // Active triage sats (animated, health-coloured)
+  // Active triage — animated, health-coloured
   const satEls = {};
   function buildSats(satList) {
     els.satLayer.innerHTML = "";
     Object.keys(satEls).forEach(k => delete satEls[k]);
-    const groups = {};
-    satList.forEach(s => { (groups[s.regime] = groups[s.regime] || []).push(s); });
-    for (const regime in groups) {
-      const arr = groups[regime];
-      arr.forEach((s, i) => {
-        const phase = i / arr.length;
-        const c = document.createElementNS(svgNS, "circle");
-        c.setAttribute("r", regime === "GEO" ? 3.6 : regime === "MEO" ? 3.2 : 2.6);
-        c.setAttribute("class", `sat h-${s.health}`);
-        c.dataset.id = s.id;
-        c.addEventListener("click", () => focusSat(s.id));
-        els.satLayer.appendChild(c);
-        satEls[s.id] = { dot: c, def: s, phase };
-      });
-    }
-  }
-  function satPos(o, t) {
-    const speed = REGIME_SPD[o.def.regime] || 0.1;
-    const ang = (o.phase + t * speed) * Math.PI * 2;
-    return {
-      x: CENTER.x + Math.cos(ang) * REGIME_RX[o.def.regime],
-      y: CENTER.y + Math.sin(ang) * REGIME_RY[o.def.regime] * 0.55,
-    };
+    satList.forEach((s) => {
+      const c = document.createElementNS(svgNS, "circle");
+      c.setAttribute("r", s.regime === "GEO" ? 3.6 : s.regime === "MEO" ? 3.2 : 2.6);
+      c.setAttribute("class", `sat h-${s.health}`);
+      c.dataset.id = s.id;
+      c.addEventListener("click", () => focusSat(s.id));
+      els.satLayer.appendChild(c);
+      satEls[s.id] = { dot: c, def: s };
+    });
   }
   function animateGlobe() {
     const t = performance.now() / 1000;
     for (const id in satEls) {
-      const o = satEls[id]; const p = satPos(o, t);
-      o.dot.setAttribute("cx", p.x); o.dot.setAttribute("cy", p.y);
-      const back = Math.sin((o.phase + t * REGIME_SPD[o.def.regime]) * Math.PI * 2) > 0;
-      o.dot.setAttribute("fill-opacity", back ? "0.55" : "1");
+      const o = satEls[id];
+      const p = projectOrbit(o.def, t, true);
+      o.dot.setAttribute("cx", p.x);
+      o.dot.setAttribute("cy", p.y);
+      o.dot.setAttribute("fill-opacity", p.behind ? "0.45" : "1");
     }
     if (STATE.focused) {
       const o = satEls[STATE.focused.id];
       if (o) {
-        const p = satPos(o, t);
+        const p = projectOrbit(o.def, t, true);
+        // Trace: 24 samples around the orbit, projected, becomes a polyline
+        const pts = [];
+        for (let k = 0; k <= 48; k++) {
+          const sampSat = { ...o.def, phase: k / 48 };
+          const sp = projectOrbit(sampSat, 0, false);
+          pts.push(`${sp.x.toFixed(1)},${sp.y.toFixed(1)}`);
+        }
         els.focusOverlay.innerHTML =
-          `<ellipse class="focus-track" cx="${CENTER.x}" cy="${CENTER.y}" ` +
-          `rx="${REGIME_RX[STATE.focused.regime]}" ry="${(REGIME_RY[STATE.focused.regime] * 0.55).toFixed(1)}"/>` +
+          `<polyline class="focus-track" points="${pts.join(" ")}"/>` +
           `<circle class="sat focused h-${STATE.focused.health}" cx="${p.x}" cy="${p.y}" r="6"/>`;
       }
     }
