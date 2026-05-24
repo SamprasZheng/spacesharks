@@ -40,6 +40,7 @@ Spacesharks is the attempt to close that gap.
 
 ## Docs
 
+- [**Pitch — Spacesharks Mission Desk**](docs/PITCH.md) — canonical submission narrative (5-word scope, problem, solution, architecture diagram, Day 1 code shape)
 - [Scope and non-goals](docs/SCOPE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Trust model](docs/TRUST.md)
