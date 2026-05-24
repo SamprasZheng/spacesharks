@@ -14,7 +14,7 @@
     <span class="brand-mark">◣</span>
     <div class="brand-stack">
       <div class="brand-title">SPACESHARK</div>
-      <div class="brand-sub">OPERATIONAL OVERVIEW <span class="sep">|</span>
+      <div class="brand-sub">MISSION COMMANDER <span class="sep">|</span>
         <span id="clock">--</span></div>
     </div>
     <div class="infer-badge" id="infer-badge" title="Click to probe local Ollama / RTX 5070">
@@ -23,8 +23,8 @@
     </div>
   </div>
   <div class="ops-strip">
-    <div class="ops-meter" title="AI AGENT daily token usage (Nimble Cloud cap)">
-      <span class="meter-label">AI AGENT</span>
+    <div class="ops-meter" title="AI advisor daily token usage (Nimble Cloud cap)">
+      <span class="meter-label">AI ADVISORS</span>
       <div class="meter">
         <i id="token-bar" class="meter-fill"></i>
         <span class="meter-tick" style="left:25%"></span>
@@ -44,7 +44,7 @@
       </div>
     </div>
     <div class="ops-director">
-      <span class="dir-line">FLIGHT DIRECTOR <b>Sampras</b></span>
+      <span class="dir-line">COMMANDER <b>Sampras</b></span>
       <span class="dir-line">FOCUS <b id="focus-name">--</b> · HEALTH <b id="focus-health">--</b></span>
       <span class="dir-line" id="gpu-line">GPU <b id="gpu-name">—</b> · UTIL <b id="gpu-util">—</b> · MEM <b id="gpu-mem">—</b></span>
     </div>
@@ -54,35 +54,53 @@
 <!-- ====================== MAIN GRID ====================== -->
 <main class="grid">
 
-  <!-- =========== LEFT: TRUST STACK =========== -->
-  <section class="panel panel-trust">
+  <!-- =========== LEFT: FLEET LIST =========== -->
+  <section class="panel panel-fleet">
     <header>
-      <span class="panel-title">AI AGENT · TRUST STACK</span>
-      <span class="panel-sub">multi-model ensemble · 5 specialists</span>
+      <span class="panel-title">FLEET</span>
+      <span class="panel-sub" id="fleet-count">0 sats</span>
     </header>
-    <div class="trust-consensus">
-      <span class="trust-label">AI CONSENSUS</span>
-      <span class="trust-value" id="trust-pct">--%</span>
-      <span class="trust-label">on</span>
-      <span class="trust-value" id="trust-target">--</span>
+    <div class="fleet-filters" id="fleet-filters">
+      <button class="ff-btn active" data-filter="ALL">ALL</button>
+      <button class="ff-btn"        data-filter="Starlink">STARLINK</button>
+      <button class="ff-btn"        data-filter="LEO">LEO</button>
+      <button class="ff-btn"        data-filter="MEO">MEO</button>
+      <button class="ff-btn"        data-filter="GEO">GEO</button>
+      <button class="ff-btn"        data-filter="WARN">⚠ WARN</button>
     </div>
-    <svg id="trust-svg" viewBox="0 0 280 220" preserveAspectRatio="xMidYMid meet"></svg>
-    <div class="trust-consensus-final" id="trust-final">CONSENSUS: ---</div>
-    <details class="collapsible" open>
-      <summary>model lineup &amp; status</summary>
-      <table class="lineup-tbl" id="lineup-tbl"><tbody></tbody></table>
-    </details>
-    <details class="collapsible">
-      <summary>view space-weather inputs</summary>
-      <div class="wx-grid" id="wx-grid"></div>
-    </details>
+    <ol class="fleet-list" id="fleet-list"></ol>
   </section>
 
-  <!-- =========== CENTER TOP: EARTH =========== -->
+  <!-- =========== CENTER TOP: ROUND TABLE =========== -->
+  <section class="panel panel-roundtable">
+    <header>
+      <span class="panel-title">ROUND TABLE</span>
+      <span class="panel-sub" id="rt-status">awaiting advisors…</span>
+    </header>
+    <div class="roundtable-wrap">
+      <svg id="roundtable" viewBox="0 0 480 360" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+    <div class="rt-tally" id="rt-tally"></div>
+  </section>
+
+  <!-- =========== RIGHT: MISSION BRIEF =========== -->
+  <section class="panel panel-brief">
+    <header>
+      <span class="panel-title">MISSION BRIEF</span>
+      <span class="panel-sub" id="brief-ts">—</span>
+    </header>
+    <div class="brief" id="brief"></div>
+    <div class="brief-actions">
+      <button class="btn-approve" id="btn-approve">APPROVE BRIEF</button>
+      <button class="btn-review"  id="btn-review">DIVE DEEPER</button>
+    </div>
+  </section>
+
+  <!-- =========== BOTTOM LEFT: EARTH MAP =========== -->
   <section class="panel panel-earth">
     <header>
-      <span class="panel-title">ORBITAL TRAJECTORY TRACKING</span>
-      <span class="panel-sub">click any satellite to focus · health-coloured</span>
+      <span class="panel-title">ORBITAL TRAJECTORY</span>
+      <span class="panel-sub">Starlink-focused · health-coloured</span>
     </header>
     <div class="earth-wrap">
       <svg id="earth" viewBox="0 0 800 520" preserveAspectRatio="xMidYMid meet">
@@ -106,144 +124,76 @@
           <clipPath id="globe-clip">
             <circle cx="400" cy="260" r="170"/>
           </clipPath>
-          <filter id="sat-glow"><feGaussianBlur stdDeviation="1.2"/></filter>
         </defs>
         <g id="stars"></g>
-        <!-- Atmosphere -->
         <circle cx="400" cy="260" r="230" fill="url(#atmo-glow)"/>
-        <!-- Globe body -->
         <circle cx="400" cy="260" r="170" fill="url(#earth-globe)"/>
-        <!-- Continents and graticule clipped to globe -->
         <g clip-path="url(#globe-clip)">
           <g id="continents" fill="#0c5b3a" opacity="0.85"></g>
           <g id="graticule" stroke="#264466" stroke-width="0.5" fill="none" opacity="0.55"></g>
           <rect x="230" y="90" width="340" height="340" fill="url(#terminator)"/>
         </g>
-        <!-- Globe edge ring -->
         <circle cx="400" cy="260" r="170" fill="none" stroke="rgba(120,180,255,0.4)" stroke-width="1"/>
-        <!-- Orbit rings (LEO/SSO/MEO/GEO ellipses, eye-level perspective) -->
         <g id="orbit-rings">
           <ellipse class="orbit orbit-LEO" cx="400" cy="260" rx="195" ry="60"/>
           <ellipse class="orbit orbit-SSO" cx="400" cy="260" rx="215" ry="95"/>
           <ellipse class="orbit orbit-MEO" cx="400" cy="260" rx="290" ry="135"/>
           <ellipse class="orbit orbit-GEO" cx="400" cy="260" rx="370" ry="195"/>
         </g>
-        <!-- Sats and labels -->
         <g id="sat-layer"></g>
         <g id="focus-overlay"></g>
-        <!-- HUD readouts -->
-        <g id="hud" font-family="ui-monospace, monospace" font-size="11">
-          <text id="hud-alt" x="20" y="30" fill="#3df0c8"></text>
-          <text id="hud-vel" x="20" y="48" fill="#3df0c8"></text>
-          <text id="hud-incl" x="20" y="66" fill="#7aa2ff"></text>
-          <text id="hud-op"   x="20" y="84" fill="#7aa2ff"></text>
-        </g>
       </svg>
     </div>
-  </section>
-
-  <!-- =========== RIGHT: AI AGENT =========== -->
-  <section class="panel panel-copilot">
-    <header>
-      <span class="panel-title">AI AGENT</span>
-      <span class="panel-sub" id="agent-sub">[ SIM-MODE ]</span>
-    </header>
-    <div class="copilot-stream" id="copilot-stream"></div>
-    <div class="copilot-foot">
-      <div class="recommend" id="recommend-card">
-        <span class="rec-label">PENDING RECOMMENDATION</span>
-        <div class="rec-body" id="rec-body">awaiting…</div>
-      </div>
-      <div class="rec-actions">
-        <button class="btn-approve" id="btn-approve">APPROVE COMMAND</button>
-        <button class="btn-review" id="btn-review">REVIEW LOGS</button>
-      </div>
-    </div>
-  </section>
-
-  <!-- =========== BOTTOM LEFT: LIFECYCLE =========== -->
-  <section class="panel panel-lifecycle">
-    <header>
-      <span class="panel-title">SATELLITE LIFECYCLE</span>
-      <span class="panel-sub" id="lc-sat">--</span>
-    </header>
-    <div class="chevrons" id="lifecycle">
-      <div class="chev" data-stage="Pre-Launch"><span>Pre-Launch</span><i></i></div>
-      <div class="chev" data-stage="In-Orbit Operations"><span>In-Orbit Operations</span><i></i></div>
-      <div class="chev" data-stage="Event Management"><span>Event Management</span><i></i></div>
-      <div class="chev" data-stage="Deorbiting / Disposal"><span>Deorbiting / Disposal</span><i></i></div>
-      <div class="chev" data-stage="Decommissioned"><span>Decommissioned</span><i></i></div>
-    </div>
-    <div class="lc-stats" id="lc-stats"></div>
   </section>
 
   <!-- =========== BOTTOM CENTER: TELEMETRY =========== -->
   <section class="panel panel-telemetry">
     <header>
-      <span class="panel-title">TELEMETRY METRICS</span>
-      <span class="panel-sub" id="tel-sat">SAT-? LIVE</span>
+      <span class="panel-title">TELEMETRY</span>
+      <span class="panel-sub" id="tel-sat">--</span>
     </header>
     <div class="telemetry">
       <div class="tel-row">
         <span class="tel-label">Altitude (km)</span>
-        <svg class="tel-svg" viewBox="0 0 300 60" preserveAspectRatio="none">
+        <svg class="tel-svg" viewBox="0 0 300 50" preserveAspectRatio="none">
           <polyline id="tel-alt" class="tel-line tel-line-c" fill="none" stroke-width="1.6"/>
         </svg>
         <b class="tel-val tel-c" id="tel-alt-val">--</b>
       </div>
       <div class="tel-row">
         <span class="tel-label">Velocity (km/s)</span>
-        <svg class="tel-svg" viewBox="0 0 300 60" preserveAspectRatio="none">
+        <svg class="tel-svg" viewBox="0 0 300 50" preserveAspectRatio="none">
           <polyline id="tel-vel" class="tel-line tel-line-b" fill="none" stroke-width="1.6"/>
         </svg>
         <b class="tel-val tel-b" id="tel-vel-val">--</b>
       </div>
       <div class="tel-row">
         <span class="tel-label">Signal (dBm)</span>
-        <svg class="tel-svg" viewBox="0 0 300 60" preserveAspectRatio="none">
+        <svg class="tel-svg" viewBox="0 0 300 50" preserveAspectRatio="none">
           <polyline id="tel-sig" class="tel-line tel-line-a" fill="none" stroke-width="1.6"/>
         </svg>
         <b class="tel-val tel-a" id="tel-sig-val">--</b>
       </div>
     </div>
+    <div class="chevrons mini" id="lifecycle">
+      <div class="chev" data-stage="Pre-Launch"><span>Pre</span></div>
+      <div class="chev" data-stage="In-Orbit Operations"><span>In-Orbit</span></div>
+      <div class="chev" data-stage="Event Management"><span>Event</span></div>
+      <div class="chev" data-stage="Deorbiting / Disposal"><span>Deorbit</span></div>
+      <div class="chev" data-stage="Decommissioned"><span>End</span></div>
+    </div>
   </section>
 
-  <!-- =========== BOTTOM RIGHT: SAT DOSSIER =========== -->
-  <section class="panel panel-dossier">
+  <!-- =========== BOTTOM RIGHT: LINEUP =========== -->
+  <section class="panel panel-lineup">
     <header>
-      <span class="panel-title">SAT DOSSIER</span>
-      <span class="panel-sub" id="dos-sat">--</span>
+      <span class="panel-title">ADVISOR LINEUP</span>
+      <span class="panel-sub" id="lineup-sub">0/5 alive</span>
     </header>
-    <div class="dossier" id="dossier"></div>
-    <div class="health-factors" id="health-factors"></div>
+    <table class="lineup-tbl" id="lineup-tbl"><tbody></tbody></table>
   </section>
 
 </main>
-
-<!-- ====================== DRAWER (collapsible secondary) ====================== -->
-<aside class="drawer collapsed" id="drawer">
-  <button class="drawer-toggle" id="drawer-toggle">
-    <span class="drawer-arrow">▾</span> SECONDARY PANELS · log · alerts · fleet table
-  </button>
-  <div class="drawer-body">
-    <div class="drawer-grid">
-      <section class="panel">
-        <header><span class="panel-title">ASSESSMENT LOG</span><span class="panel-sub" id="log-count">0</span></header>
-        <ol class="log" id="log-body"></ol>
-      </section>
-      <section class="panel panel-alerts">
-        <header><span class="panel-title">ALERTS</span><span class="panel-sub" id="alert-count">0</span></header>
-        <ul class="alerts" id="alerts-body"></ul>
-      </section>
-      <section class="panel">
-        <header><span class="panel-title">FLEET TABLE</span><span class="panel-sub">click row → focus</span></header>
-        <table class="fleet"><thead>
-          <tr><th>HEALTH</th><th>NAME</th><th>REGIME</th><th>AGE/LIFE</th><th>TID%</th><th>SCORE</th></tr>
-        </thead><tbody id="fleet-body"></tbody></table>
-      </section>
-    </div>
-  </div>
-</aside>
 
 <script src="/app.js"></script>
 </body>

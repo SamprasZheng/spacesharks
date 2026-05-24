@@ -55,7 +55,7 @@ DATA.mkdir(exist_ok=True)
 # ============================================================================
 
 def _sat(norad, name, regime, operator, launched, design_life, mass, incl, alt_km,
-         tid_budget=50.0, mission="comms", lifecycle="In-Orbit Operations"):
+         tid_budget=50.0, mission="comms", lifecycle="In-Orbit Operations", shell=None):
     return {
         "id": norad,
         "name": name,
@@ -66,12 +66,13 @@ def _sat(norad, name, regime, operator, launched, design_life, mass, incl, alt_k
         "mass_kg": mass,
         "inclination_deg": incl,
         "altitude_km": alt_km,
-        "tid_budget_krad": tid_budget,    # how much total ionizing dose it can tolerate
+        "tid_budget_krad": tid_budget,
         "tid_accumulated_krad": tid_budget * random.uniform(0.05, 0.55),
         "see_events_30d": random.randint(0, 3),
         "last_safe_mode": None,
         "mission_type": mission,
         "lifecycle_stage": lifecycle,
+        "shell": shell,                   # Starlink shell tag, e.g. "v1.5-G4", "v2-mini", "DTC"
         # mutable health fields:
         "health": "GREEN",
         "score": 0.10,
@@ -80,39 +81,72 @@ def _sat(norad, name, regime, operator, launched, design_life, mass, incl, alt_k
     }
 
 
+def _starlink(norad, name, shell, incl, alt, launched, design_life=5, mass=300, mission="comms"):
+    return _sat(norad, name, "LEO", "SpaceX", launched, design_life, mass, incl, alt,
+                tid_budget=20.0, mission=mission, shell=shell)
+
+
+# Starlink-heavy roster — most-popular constellation in operational use today.
+# Shell tags reflect the public generations (v0.9 / v1.0 / v1.5 / v2.0-mini /
+# v2.0-DTC). Mass and inclination follow the published spec for that shell.
 SATS = [
-    # LEO crewed / station --------------------------------------------------
+    # ===== Starlink shell v1.0 / Group 1 (53° / 550 km) =====
+    _starlink("44737", "STRLNK-1007",  "v1.0/G1",    53.0, 550, "2020-04-22"),
+    _starlink("45123", "STRLNK-1196",  "v1.0/G1",    53.0, 550, "2020-06-13"),
+    _starlink("47301", "STRLNK-1812",  "v1.0/G1",    53.0, 550, "2021-01-20"),
+    _starlink("48275", "STRLNK-1234",  "v1.0/G1",    53.0, 550, "2021-05-15"),
+    # ===== Starlink shell v1.5 / Group 4 (53.2° / 540-570 km, laser links) =====
+    _starlink("48276", "STRLNK-2118",  "v1.5/G4",    53.2, 548, "2022-02-21"),
+    _starlink("49144", "STRLNK-2401",  "v1.5/G4",    53.2, 550, "2022-04-29"),
+    _starlink("48277", "STRLNK-3047",  "v1.5/G4",    53.2, 552, "2022-09-04"),
+    _starlink("52789", "STRLNK-3192",  "v1.5/G4",    53.2, 549, "2022-11-12"),
+    _starlink("53121", "STRLNK-3204",  "v1.5/G4",    70.0, 570, "2022-12-08"),
+    _starlink("54121", "STRLNK-3411",  "v1.5/G4",    53.2, 545, "2023-01-26"),
+    _starlink("55012", "STRLNK-3502",  "v1.5/G4",    97.6, 560, "2023-03-03"),
+    _starlink("48278", "STRLNK-4012",  "v1.5/G4",    43.0, 540, "2023-03-12"),
+    _starlink("56012", "STRLNK-4119",  "v1.5/G4",    43.0, 543, "2023-04-15"),
+    _starlink("57212", "STRLNK-4567",  "v1.5/G4",    43.0, 540, "2023-07-09"),
+    _starlink("48279", "STRLNK-5021",  "v2.0-mini",  43.0, 539, "2023-11-08", design_life=5, mass=800),
+    _starlink("58112", "STRLNK-5421",  "v2.0-mini",  43.0, 542, "2024-01-22", design_life=5, mass=800),
+    # ===== Starlink shell v2.0 Mini / Group 6 (~530 km) =====
+    _starlink("59001", "STRLNK-6011",  "v2.0-mini",  43.0, 530, "2024-03-02", design_life=5, mass=800),
+    _starlink("59102", "STRLNK-6112",  "v2.0-mini",  43.0, 532, "2024-05-14", design_life=5, mass=800),
+    _starlink("59210", "STRLNK-6234",  "v2.0-mini",  43.0, 530, "2024-07-08", design_life=5, mass=800),
+    _starlink("60012", "STRLNK-6502",  "v2.0-mini",  43.0, 528, "2024-09-25", design_life=5, mass=800),
+    _starlink("60412", "STRLNK-6721",  "v2.0-mini",  43.0, 531, "2024-11-19", design_life=5, mass=800),
+    _starlink("60815", "STRLNK-7011",  "v2.0-mini",  43.0, 530, "2025-01-12", design_life=5, mass=800),
+    # ===== Starlink Direct-to-Cell / Group 5 (D2C / partnered with T-Mobile) =====
+    _starlink("58311", "STRLNK-DTC-01","DTC",        53.0, 540, "2024-01-03", design_life=5, mass=800, mission="d2c"),
+    _starlink("58422", "STRLNK-DTC-22","DTC",        53.0, 540, "2024-02-18", design_life=5, mass=800, mission="d2c"),
+    _starlink("59512", "STRLNK-DTC-44","DTC",        53.0, 540, "2024-06-02", design_life=5, mass=800, mission="d2c"),
+    _starlink("60101", "STRLNK-DTC-71","DTC",        53.0, 540, "2024-08-17", design_life=5, mass=800, mission="d2c"),
+    _starlink("60615", "STRLNK-DTC-93","DTC",        53.0, 540, "2024-10-30", design_life=5, mass=800, mission="d2c"),
+    # ===== Starlink polar (97.6° SSO, Group 3) =====
+    _starlink("48800", "STRLNK-3501",  "v1.5/G3",    97.6, 570, "2023-08-12"),
+    _starlink("55501", "STRLNK-3551",  "v1.5/G3",    97.6, 568, "2023-11-04"),
+    _starlink("58701", "STRLNK-3601",  "v1.5/G3",    97.6, 570, "2024-02-04"),
+    _starlink("60201", "STRLNK-3661",  "v1.5/G3",    97.6, 569, "2024-07-22"),
+    # ===== Stations =====
     _sat("25544", "ISS",            "LEO", "NASA/Roskosmos", "1998-11-20", 35, 419725, 51.6,  418, tid_budget=80, mission="station"),
-    _sat("48274", "CSS-Tiangong",   "LEO", "CMSA",          "2021-04-29", 15, 80000,  41.5,  389, tid_budget=70, mission="station"),
-    # LEO comms (Starlink shell) -------------------------------------------
-    _sat("48275", "STRLNK-1234",    "LEO", "SpaceX",        "2021-05-15",  5, 260,    53.0,  550, tid_budget=20, mission="comms"),
-    _sat("48276", "STRLNK-2118",    "LEO", "SpaceX",        "2022-02-21",  5, 260,    53.2,  548, tid_budget=20, mission="comms"),
-    _sat("48277", "STRLNK-3047",    "LEO", "SpaceX",        "2022-09-04",  5, 260,    53.2,  552, tid_budget=20, mission="comms"),
-    _sat("48278", "STRLNK-4012",    "LEO", "SpaceX",        "2023-03-12",  5, 260,    43.0,  540, tid_budget=20, mission="comms"),
-    _sat("48279", "STRLNK-5021",    "LEO", "SpaceX",        "2023-11-08",  5, 260,    43.0,  539, tid_budget=20, mission="comms"),
-    _sat("45123", "ONEWEB-0188",    "LEO", "Eutelsat",      "2021-07-01",  7, 147,    87.4, 1200, tid_budget=30, mission="comms"),
-    _sat("45124", "ONEWEB-0212",    "LEO", "Eutelsat",      "2021-12-27",  7, 147,    87.4, 1200, tid_budget=30, mission="comms"),
-    _sat("43571", "IRIDIUM-167",    "LEO", "Iridium",       "2018-07-25", 15, 860,    86.4,  778, tid_budget=40, mission="comms"),
-    # SSO Earth-observation -------------------------------------------------
-    _sat("39084", "Landsat-8",      "SSO", "NASA/USGS",     "2013-02-11", 10, 2071,   98.2,  705, tid_budget=60, mission="EO"),
-    _sat("49260", "Landsat-9",      "SSO", "NASA/USGS",     "2021-09-27", 10, 2623,   98.2,  705, tid_budget=60, mission="EO"),
-    _sat("57172", "Sentinel-2C",    "SSO", "ESA/Copernicus","2024-09-04", 12, 1130,   98.6,  786, tid_budget=55, mission="EO"),
-    _sat("40697", "Sentinel-2A",    "SSO", "ESA/Copernicus","2015-06-23", 12, 1130,   98.6,  786, tid_budget=55, mission="EO"),
-    _sat("41335", "Sentinel-3A",    "SSO", "ESA/Copernicus","2016-02-16", 12, 1250,   98.7,  814, tid_budget=55, mission="EO"),
-    _sat("43013", "NOAA-20",        "SSO", "NOAA",          "2017-11-18",  7, 2540,   98.7,  833, tid_budget=50, mission="weather"),
-    _sat("28654", "NOAA-18",        "SSO", "NOAA",          "2005-05-20",  3, 1457,   98.7,  854, tid_budget=50, mission="weather", lifecycle="Event Management"),
-    _sat("56217", "NOAA-21",        "SSO", "NOAA",          "2022-11-10",  7, 2930,   98.7,  833, tid_budget=50, mission="weather"),
-    _sat("33591", "MetOp-A",        "SSO", "EUMETSAT",      "2006-10-19",  5, 4093,   98.7,  817, tid_budget=50, mission="weather", lifecycle="Deorbiting / Disposal"),
-    # MEO navigation -------------------------------------------------------
-    _sat("28474", "GPS-IIRM-5",     "MEO", "USSF",          "2006-09-25", 10, 2032,   55.0, 20180, tid_budget=120, mission="nav"),
-    _sat("40294", "GLONASS-755",    "MEO", "Roskosmos",     "2014-06-14", 10, 1415,   64.8, 19140, tid_budget=110, mission="nav"),
-    _sat("41859", "Galileo-22",     "MEO", "ESA/EUSPA",     "2016-11-17", 12, 730,    56.0, 23222, tid_budget=120, mission="nav"),
-    _sat("44793", "Beidou-3 M22",   "MEO", "CNSA",          "2019-12-16", 12, 1014,   55.0, 21528, tid_budget=120, mission="nav"),
-    # GEO ------------------------------------------------------------------
-    _sat("43226", "GOES-16",        "GEO", "NOAA",          "2016-11-19", 15, 5192,    0.05, 35786, tid_budget=200, mission="weather"),
-    _sat("43689", "GOES-17",        "GEO", "NOAA",          "2018-03-01", 15, 5192,    0.05, 35786, tid_budget=200, mission="weather"),
-    _sat("39260", "Inmarsat-5 F1",  "GEO", "Inmarsat",      "2013-12-08", 15, 6100,    0.05, 35786, tid_budget=200, mission="comms"),
-    _sat("42432", "EchoStar-23",    "GEO", "EchoStar",      "2017-03-16", 15, 5500,    0.05, 35786, tid_budget=200, mission="comms"),
+    _sat("48274", "CSS-Tiangong",   "LEO", "CMSA",           "2021-04-29", 15, 80000,  41.5,  389, tid_budget=70, mission="station"),
+    # ===== Non-Starlink LEO (small comparison set) =====
+    _sat("45124", "ONEWEB-0212",    "LEO", "Eutelsat",       "2021-12-27",  7, 147,    87.4, 1200, tid_budget=30, mission="comms"),
+    _sat("43571", "IRIDIUM-167",    "LEO", "Iridium",        "2018-07-25", 15, 860,    86.4,  778, tid_budget=40, mission="comms"),
+    # ===== SSO Earth-observation =====
+    _sat("49260", "Landsat-9",      "SSO", "NASA/USGS",      "2021-09-27", 10, 2623,   98.2,  705, tid_budget=60, mission="EO"),
+    _sat("57172", "Sentinel-2C",    "SSO", "ESA/Copernicus", "2024-09-04", 12, 1130,   98.6,  786, tid_budget=55, mission="EO"),
+    _sat("43013", "NOAA-20",        "SSO", "NOAA",           "2017-11-18",  7, 2540,   98.7,  833, tid_budget=50, mission="weather"),
+    _sat("28654", "NOAA-18",        "SSO", "NOAA",           "2005-05-20",  3, 1457,   98.7,  854, tid_budget=50, mission="weather", lifecycle="Event Management"),
+    # ===== MEO navigation =====
+    _sat("28474", "GPS-IIRM-5",     "MEO", "USSF",           "2006-09-25", 10, 2032,   55.0, 20180, tid_budget=120, mission="nav"),
+    _sat("40294", "GLONASS-755",    "MEO", "Roskosmos",      "2014-06-14", 10, 1415,   64.8, 19140, tid_budget=110, mission="nav"),
+    _sat("41859", "Galileo-22",     "MEO", "ESA/EUSPA",      "2016-11-17", 12, 730,    56.0, 23222, tid_budget=120, mission="nav"),
+    _sat("44793", "Beidou-3 M22",   "MEO", "CNSA",           "2019-12-16", 12, 1014,   55.0, 21528, tid_budget=120, mission="nav"),
+    # ===== GEO =====
+    _sat("43226", "GOES-16",        "GEO", "NOAA",           "2016-11-19", 15, 5192,    0.05, 35786, tid_budget=200, mission="weather"),
+    _sat("43689", "GOES-17",        "GEO", "NOAA",           "2018-03-01", 15, 5192,    0.05, 35786, tid_budget=200, mission="weather"),
+    _sat("39260", "Inmarsat-5 F1",  "GEO", "Inmarsat",       "2013-12-08", 15, 6100,    0.05, 35786, tid_budget=200, mission="comms"),
+    _sat("42432", "EchoStar-23",    "GEO", "EchoStar",       "2017-03-16", 15, 5500,    0.05, 35786, tid_budget=200, mission="comms"),
 ]
 
 
@@ -572,6 +606,56 @@ def assessor_vote(model: dict, sat: dict, wx: dict) -> tuple[str, float]:
     return label, score
 
 
+def arbiter_call(sat: dict, wx: dict, votes: list[dict]) -> dict | None:
+    """T2 escalation. Triggered when ensemble disagreement >= 2 distinct labels.
+
+    Sends a longer prompt with the existing votes laid out, asks the arbiter
+    to weigh them, and returns its single overriding label + rationale.
+    """
+    if INFERENCE["mode"] != "LIVE-OLLAMA":
+        return None
+    arbiter_id = "nemotron-3-nano:4b"
+    if not _is_available(arbiter_id):
+        return None
+    vote_lines = "\n".join(
+        f"- {v.get('vendor','?')} {v.get('model','?')}: {v['label']}"
+        for v in votes
+    )
+    prompt = (
+        f"You are the T2 arbiter for satellite operations. Five T1 specialists just voted on "
+        f"{sat['name']} ({sat['regime']}, op {sat['operator']}). Their votes were:\n{vote_lines}\n\n"
+        f"Context: age {sat_age_years(sat):.1f}/{sat['design_life_years']}y, "
+        f"TID {sat['tid_accumulated_krad']:.1f}/{sat['tid_budget_krad']:.0f} krad, "
+        f"SEEs(30d)={sat['see_events_30d']}, "
+        f"Kp {wx['kp']}, X-ray {wx['xray_class']}, SEP {wx['sep_pfu']} pfu.\n\n"
+        f"Adjudicate. Reply ONLY one word from {{GREEN, YELLOW, RED, BLACK}}."
+    )
+    body = {
+        "model": _resolve_id(arbiter_id),
+        "messages": [
+            {"role": "system", "content": "You are a Tier-2 arbiter for spacecraft health. Resolve disagreement between Tier-1 specialists. Output one word only."},
+            {"role": "user",   "content": prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.0, "num_predict": 400},
+    }
+    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=25.0)
+    if resp is None:
+        return None
+    INFERENCE["live_calls"] += 1
+    msg = resp.get("message") or {}
+    content = (msg.get("content") or "").strip()
+    thinking = (msg.get("thinking") or "").strip()
+    haystack = (content + " " + thinking).upper()
+    label = next((k for k in ("BLACK", "RED", "YELLOW", "GREEN") if k in haystack), None)
+    return {
+        "label": label,
+        "rationale": (thinking or content)[:400],
+        "ms": round(ms, 1),
+        "model": arbiter_id,
+    }
+
+
 def assess_sat(sat: dict, wx: dict) -> dict:
     """Run every assessor, take the median label, return assessment dossier."""
     votes = []
@@ -608,21 +692,36 @@ def assess_sat(sat: dict, wx: dict) -> dict:
     consensus_pct = round(100.0 * top_count / len(votes), 1)
 
     prev = sat["health"]
+    transition = None
+    age, tid, see, wxf = base_factors(sat, wx)
+
+    # T2 ARBITER: escalate when ≥2 unique labels among the live votes (real
+    # ensemble disagreement, not noise). Arbiter overrides the median.
+    arbiter = None
+    live_labels = {v["label"] for v in votes if v.get("live")}
+    if len(live_labels) >= 2:
+        arbiter = arbiter_call(sat, wx, [v for v in votes if v.get("live")])
+        if arbiter and arbiter["label"]:
+            median_label = arbiter["label"]
+
     sat["health"] = median_label
     sat["score"] = round(median_score, 3)
     sat["last_assessed"] = datetime.now(timezone.utc).strftime("%H:%M:%SZ")
-
-    transition = None
     if prev != median_label:
         transition = f"{prev} → {median_label}"
 
-    age, tid, see, wxf = base_factors(sat, wx)
+    # Build the mission brief for this round (round-table session).
+    brief = build_mission_brief(sat, wx, votes, arbiter, transition,
+                                {"age": age, "tid": tid, "see": see, "weather": wxf})
+
     return {
         "votes": votes,
         "median_label": median_label,
         "median_score": round(median_score, 3),
         "consensus_pct": consensus_pct,
         "transition": transition,
+        "arbiter": arbiter,
+        "brief": brief,
         "factors": {
             "age": round(age, 3),
             "tid": round(tid, 3),
@@ -630,6 +729,63 @@ def assess_sat(sat: dict, wx: dict) -> dict:
             "weather": round(wxf, 3),
         },
     }
+
+
+def build_mission_brief(sat, wx, votes, arbiter, transition, factors):
+    """Structured, traceable summary of a round-table session. Maps to the
+    'mission brief' deliverable the operator can review and approve."""
+    label = sat["health"]
+    counts = {"GREEN": 0, "YELLOW": 0, "RED": 0, "BLACK": 0}
+    for v in votes:
+        counts[v["label"]] = counts.get(v["label"], 0) + 1
+    # Action recommendation based on consensus + driver
+    if label == "BLACK":
+        action = "RETIRE"
+    elif label == "RED":
+        action = "SAFE-MODE"
+    elif label == "YELLOW":
+        action = "MONITOR"
+    else:
+        action = "NOMINAL"
+    # Provenance row matching docs/EVENT_SCHEMA.md v1.0
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = f"{sat['id']}|{label}|{now}|{factors}"
+    evidence_hash = hashlib.sha256(payload.encode()).hexdigest()
+    return {
+        "subject": sat["name"],
+        "subject_id": sat["id"],
+        "regime": sat["regime"],
+        "operator": sat["operator"],
+        "shell": sat.get("shell"),
+        "synopsis": _brief_synopsis(sat, label, transition, factors),
+        "health": label,
+        "transition": transition,
+        "votes": [{"model": v.get("model"), "vendor": v.get("vendor"),
+                   "label": v["label"], "ms": v.get("ms"), "live": v.get("live")}
+                  for v in votes],
+        "vote_counts": counts,
+        "arbiter": arbiter,            # None or {label, rationale, ms, model}
+        "drivers": factors,
+        "weather": wx,
+        "action": action,
+        "provenance": {
+            "event_id": f"on-orbit-ops-{sat['id']}-{now.replace(':','').replace('-','')}-{evidence_hash[:8]}",
+            "evidence_hash": evidence_hash,
+            "parser_version": "0.3.0",
+            "ts": now,
+        },
+        "review_status": "draft" if action in ("SAFE-MODE", "RETIRE") else "internal-log-only",
+    }
+
+
+def _brief_synopsis(sat, label, transition, factors):
+    drivers = sorted(factors.items(), key=lambda kv: -kv[1])
+    top = drivers[0]
+    name_map = {"age": "age vs life", "tid": "TID dose", "see": "SEEs", "weather": "space weather"}
+    head = f"{sat['name']} health {label}"
+    if transition:
+        head = head + f" ({transition})"
+    return f"{head}; primary driver: {name_map.get(top[0], top[0])} ({top[1]:.2f})."
 
 
 # ============================================================================
@@ -778,6 +934,7 @@ def public_sat(sat: dict) -> dict:
         "id": sat["id"],
         "name": sat["name"],
         "regime": sat["regime"],
+        "shell": sat.get("shell"),
         "operator": sat["operator"],
         "launched": sat["launched"],
         "age_years": round(age, 2),
@@ -901,7 +1058,13 @@ _RUN_FLAG = {"value": True}
 
 
 def assessment_loop() -> None:
-    """Every ~2s: tick weather, degrade sats, run assessors, broadcast."""
+    """Mission-commander pacing: the focused sat gets a full round-table
+    session every tick; the rest of the fleet drifts in a slow background
+    sweep so the GPU isn't pinned and the operator sees crisp updates on
+    whatever they're staring at."""
+    sweep_idx = 0
+    last_focus_assess = 0.0
+    last_fleet_sweep = 0.0
     while True:
         if _RUN_FLAG["value"]:
             WEATHER.tick()
@@ -910,9 +1073,22 @@ def assessment_loop() -> None:
                 update_telemetry(s)
             wx = WEATHER.snapshot()
 
-            # assess one sat per tick (round-robin) — keeps token usage modest
-            sat = SATS[assessment_loop._idx % len(SATS)]  # type: ignore[attr-defined]
-            assessment_loop._idx += 1                     # type: ignore[attr-defined]
+            now_ts = time.time()
+            focus = focused_sat()
+
+            # Priority 1: focused sat round-table — every ~10s.
+            if now_ts - last_focus_assess >= 10.0:
+                sat = focus
+                last_focus_assess = now_ts
+            # Priority 2: background fleet sweep — one non-focus sat every 8s.
+            elif now_ts - last_fleet_sweep >= 8.0:
+                others = [s for s in SATS if s["id"] != focus["id"]]
+                sat = others[sweep_idx % len(others)]
+                sweep_idx += 1
+                last_fleet_sweep = now_ts
+            else:
+                time.sleep(1.5)
+                continue
             assessment = assess_sat(sat, wx)
 
             # surface transitions to copilot + alerts
@@ -959,11 +1135,9 @@ def assessment_loop() -> None:
                 "sats": [public_sat(s) for s in SATS],
                 "focused": focused_sat_view(),
                 "last_assessed": {"sat_id": sat["id"], "assessment": assessment, "health": sat["health"]},
+                "brief": assessment.get("brief"),
             })
-        time.sleep(1.8)
-
-
-assessment_loop._idx = 0  # type: ignore[attr-defined]
+        time.sleep(0.5)
 
 
 def copilot_loop() -> None:
