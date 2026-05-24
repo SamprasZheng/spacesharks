@@ -219,10 +219,14 @@ _seed_extra_starlinks(target=100)
 
 
 # ============================================================================
-# Visual catalog — large background set for "global coverage" feel, per
-# docs/RISKS_AND_FIXES.md P1 "Fleet size should feel global without forcing
-# realtime updates". These objects are NOT in the council's triage queue;
-# they're rendered as dim dots on the globe with attention_level = UNKNOWN.
+# Visual catalog — RETIRED.
+#
+# Earlier versions rendered a 5-10k background dot field to give a
+# "global coverage" feel. Operator feedback ("我只要真的衛星, 我不要只有
+# 全球覆蓋感, 但是是假的") rejected that: the globe should only show sats
+# that are actually being assessed by the council. We keep the generator
+# function below so old code paths that reference it don't break, but the
+# top-level VISUAL_CATALOG is now an empty list.
 # ============================================================================
 
 def _build_visual_catalog(rng_seed: int = 42, target_total: int = 10000) -> list[dict]:
@@ -271,7 +275,7 @@ def _build_visual_catalog(rng_seed: int = 42, target_total: int = 10000) -> list
     return cat
 
 
-VISUAL_CATALOG = _build_visual_catalog()
+VISUAL_CATALOG: list[dict] = []   # retired — only real assessed sats now
 
 
 # ============================================================================

@@ -463,37 +463,26 @@
     };
   }
 
-  // Background visual catalog — static (no time component) using the same
-  // projection so it sits on the same 3D shell as the active triage.
-  function buildCatalog(catalog) {
-    const parts = [];
-    catalog.forEach((s) => {
-      const p = projectOrbit(s, 0, false);
-      if (p.behind) {
-        parts.push(`<circle class="sat-bg sat-bg-back" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.2"/>`);
-      } else {
-        parts.push(`<circle class="sat-bg" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.4"/>`);
-      }
-    });
-    els.catalogLayer.innerHTML = parts.join("");
-    if (els.earthCount)  els.earthCount.textContent  = catalog.length.toLocaleString();
-    if (els.catalogSize) els.catalogSize.textContent = catalog.length.toLocaleString();
-  }
+  // (No background visual catalog — operator wants only real sats.)
 
-  // Active triage — animated, health-coloured
+  // Active triage — animated, health-coloured. This is the ONLY thing
+  // rendered on the globe; every dot here is a sat the council is
+  // actually assessing in round-robin.
   const satEls = {};
   function buildSats(satList) {
     els.satLayer.innerHTML = "";
     Object.keys(satEls).forEach(k => delete satEls[k]);
     satList.forEach((s) => {
       const c = document.createElementNS(svgNS, "circle");
-      c.setAttribute("r", s.regime === "GEO" ? 3.6 : s.regime === "MEO" ? 3.2 : 2.6);
+      c.setAttribute("r", s.regime === "GEO" ? 4 : s.regime === "MEO" ? 3.6 : 3.2);
       c.setAttribute("class", `sat h-${s.health}`);
       c.dataset.id = s.id;
       c.addEventListener("click", () => focusSat(s.id));
       els.satLayer.appendChild(c);
       satEls[s.id] = { dot: c, def: s };
     });
+    if (els.earthCount)  els.earthCount.textContent  = satList.length.toLocaleString();
+    if (els.catalogSize) els.catalogSize.textContent = satList.length.toLocaleString();
   }
   function animateGlobe() {
     const t = performance.now() / 1000;
@@ -525,10 +514,7 @@
   requestAnimationFrame(animateGlobe);
   buildStars(); buildGraticule(); buildContinents();
 
-  // pull catalog once
-  fetch("/api/catalog").then(r => r.json()).then(d => {
-    if (d.catalog) buildCatalog(d.catalog);
-  }).catch(() => {});
+  // (Catalog fetch removed — globe shows only the assessed fleet.)
 
   // ------------------------------------------------------------------ telemetry
   function renderTelemetry(f) {
