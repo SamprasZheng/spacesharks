@@ -151,6 +151,50 @@ SATS = [
 
 
 # ============================================================================
+# Visual catalog — large background set for "global coverage" feel, per
+# docs/RISKS_AND_FIXES.md P1 "Fleet size should feel global without forcing
+# realtime updates". These objects are NOT in the council's triage queue;
+# they're rendered as dim dots on the globe with attention_level = UNKNOWN.
+# ============================================================================
+
+def _build_visual_catalog(rng_seed: int = 42, target_total: int = 5000) -> list[dict]:
+    rng = random.Random(rng_seed)
+    cat: list[dict] = []
+    # Mix tracks roughly the real-public-catalog shape (Starlink-heavy)
+    mix = [
+        ("LEO-STARLINK", 4400, "v1.5/G4", 53.2, (530, 570)),
+        ("LEO-COMMS",     250, "OneWeb",  87.4, (1180, 1220)),
+        ("SSO-EO",        200, "EO",      98.6, (700,  830)),
+        ("MEO-NAV",        90, "Nav",     55.0, (19000, 23300)),
+        ("GEO",            60, "GEO",      0.1, (35780, 35792)),
+    ]
+    norad = 70000
+    for tag, n, shell, incl, alt_range in mix:
+        for i in range(n):
+            alt = rng.uniform(*alt_range)
+            inc = incl + rng.uniform(-2, 2)
+            regime = ("LEO" if alt < 1500 else "SSO" if alt < 2000 else "MEO" if alt < 30000 else "GEO")
+            cat.append({
+                "id": str(norad),
+                "name": f"{tag.split('-')[-1]}-{norad}",
+                "regime": regime,
+                "shell": shell,
+                "inclination_deg": round(inc, 2),
+                "altitude_km": round(alt, 1),
+                "attention_level": "UNKNOWN",   # not yet assessed — renders grey
+                "health": "UNKNOWN",
+                "last_refresh_ts": None,
+            })
+            norad += 1
+            if len(cat) >= target_total:
+                return cat
+    return cat
+
+
+VISUAL_CATALOG = _build_visual_catalog()
+
+
+# ============================================================================
 # Space weather — the driver of health transitions.
 # ============================================================================
 
@@ -252,33 +296,69 @@ TOKEN_USAGE = {
 # score. The top-bar badge always declares which mode is hot.
 # ============================================================================
 
-def _mk_model(model_id, vendor, family, role, est_size_gb):
+def _mk_model(model_id, vendor, family, role, est_size_gb, seat=None):
     return {
         "id": model_id, "vendor": vendor, "family": family, "role": role,
         "est_size_gb": est_size_gb,
+        "seat": seat,                       # specialist role this model fills
         "alive": True, "last_call_ms": None,
         "success": 0, "fail": 0, "consecutive_fail": 0,
-        "last_label": None, "last_thinking": None,
+        "last_label": None, "last_thinking": None, "last_brief": None,
         "replaced_by": None,                # backup model id if rotated out
     }
 
 
-# Primary voters: one per vendor (NVIDIA fills one slot; backups can swap).
-# Sizes shown are Q4_K_M approximations — exact may vary by tag.
-PRIMARY_MODELS = [
-    _mk_model("nemotron-3-nano:4b", "NVIDIA",    "Nemotron-3",   "PRIMARY", 2.8),
-    _mk_model("qwen3:4b",           "Alibaba",   "Qwen-3",       "PRIMARY", 2.5),
-    _mk_model("llama3.2:3b",        "Meta",      "Llama-3.2",    "PRIMARY", 2.0),
-    _mk_model("phi3.5",             "Microsoft", "Phi-3.5-mini", "PRIMARY", 2.3),
-    _mk_model("gemma2:2b",          "Google",    "Gemma-2",      "PRIMARY", 1.6),
-]
-BACKUP_MODELS = [
-    _mk_model("mistral:7b",         "Mistral AI","Mistral-7B",   "BACKUP",  4.1),
-    _mk_model("deepseek-r1:7b",     "DeepSeek",  "DeepSeek-R1",  "BACKUP",  4.7),
-    _mk_model("granite3-dense:2b",  "IBM",       "Granite-3",    "BACKUP",  1.5),
+# Specialist seats (per docs/RISKS_AND_FIXES.md "Minimum council size should be
+# three models"). Each seat owns a role-specific prompt — the council is no
+# longer five copies of the same question. Nemotron is the fixed Mission
+# Director (arbiter), NOT one of the specialist seats.
+COUNCIL_SEATS = [
+    {"seat": "ORBIT",    "title": "Orbit Analyst",
+     "prompt": "Assess orbit stability — altitude, age vs design life, decay/drag risk."},
+    {"seat": "TRIAGE",   "title": "Health Triage Analyst",
+     "prompt": "Assess overall operational triage priority — fold in driver signals from age/TID/SEE/weather."},
+    {"seat": "EVIDENCE", "title": "Evidence Analyst",
+     "prompt": "Assess provenance quality — is the public data fresh + sufficient to support this judgement?"},
+    {"seat": "RADIATION","title": "Radiation Analyst",          # OPTIONAL
+     "prompt": "Assess radiation environment — TID accumulation, recent SEEs, current Kp/X-ray/SEP."},
+    {"seat": "IMPACT",   "title": "Mission Impact Analyst",     # OPTIONAL
+     "prompt": "Assess mission-impact severity — comms/nav/EO consequence if this sat degrades."},
 ]
 
-CONSECUTIVE_FAIL_THRESHOLD = 3  # trip-and-replace after N failures in a row
+# Model assignments — Nemotron stays out of the specialist pool because it is
+# the fixed Mission Director. Specialists are the 5 non-NVIDIA primaries plus
+# one backup if any seat is unfillable.
+PRIMARY_MODELS = [
+    _mk_model("llama3.2:3b",     "Meta",       "Llama-3.2",    "PRIMARY", 2.0, seat="ORBIT"),
+    _mk_model("qwen3:4b",        "Alibaba",    "Qwen-3",       "PRIMARY", 2.5, seat="TRIAGE"),
+    _mk_model("phi3.5",          "Microsoft",  "Phi-3.5-mini", "PRIMARY", 2.3, seat="EVIDENCE"),
+    _mk_model("gemma2:2b",       "Google",     "Gemma-2",      "PRIMARY", 1.6, seat="RADIATION"),
+    _mk_model("mistral:7b",      "Mistral AI", "Mistral-7B",   "PRIMARY", 4.1, seat="IMPACT"),
+]
+BACKUP_MODELS = [
+    _mk_model("deepseek-r1:7b",     "DeepSeek",   "DeepSeek-R1", "BACKUP",  4.7),
+    _mk_model("granite3-dense:2b",  "IBM",        "Granite-3",   "BACKUP",  1.5),
+    _mk_model("qwen2.5:7b",         "Alibaba",    "Qwen-2.5",    "BACKUP",  4.7),
+]
+MISSION_DIRECTOR = _mk_model("nemotron-3-nano:4b", "NVIDIA", "Nemotron-3", "DIRECTOR", 2.8)
+MISSION_DIRECTOR["seat"] = "DIRECTOR"
+
+CONSECUTIVE_FAIL_THRESHOLD = 3
+
+# Council size preset → first N specialist seats are active. Minimum 3 (TMR).
+COUNCIL_MODES = {
+    "ECO":      {"seats": 3, "label": "Eco · TMR-3",         "desc": "RTX 4070 / older GPUs"},
+    "BALANCED": {"seats": 4, "label": "Balanced · 4 seats",  "desc": "Safer default under VRAM pressure"},
+    "FULL":     {"seats": 5, "label": "Full Council · 5",    "desc": "Best demo on RTX 5070 12 GB"},
+}
+
+# GPU memory thresholds (% of total VRAM) for the pre-flight guard.
+GPU_WARN_PCT  = 80.0
+GPU_BLOCK_PCT = 92.0
+
+# Cooldown for the Mission Inbox — same (sat, attention_level) cannot push
+# again within this window. Stops the popup-spam pattern flagged in P0.
+INBOX_COOLDOWN_S = 300  # 5 minutes
 
 
 INFERENCE = {
@@ -288,9 +368,13 @@ INFERENCE = {
     "last_probe_ts": 0.0,
     "live_calls": 0,
     "live_failures": 0,
-    "host_gpu": None,             # populated when nvidia-smi is reachable
+    "host_gpu": None,
     "last_assess_ts": None,
-    "last_lineup_call_ms": None,  # sum of latencies across the lineup last tick
+    "last_lineup_call_ms": None,
+    "council_mode": os.environ.get("COUNCIL_MODE", "BALANCED"),  # ECO | BALANCED | FULL
+    "vram_gated_count": 0,        # number of calls deferred because VRAM was tight
+    "director_calls": 0,
+    "director_last_ms": None,
 }
 
 
@@ -312,17 +396,25 @@ def _resolve_id(model_id: str) -> str:
     return model_id
 
 
+def _seats_for_mode() -> list[str]:
+    n = COUNCIL_MODES[INFERENCE["council_mode"]]["seats"]
+    return [s["seat"] for s in COUNCIL_SEATS[:n]]
+
+
 def lineup_alive() -> list[dict]:
-    """Return the current 5-voter lineup, replacing any tripped primary with a
-    backup. Each tripped slot is filled with the first available backup that
-    isn't already in the lineup, in declaration order."""
+    """Return the seat-filling lineup for the current council mode (3/4/5).
+    Each seat fills with its primary if alive+available, else the first
+    available backup (which inherits the seat role)."""
+    active_seats = _seats_for_mode()
     out = []
     used = set()
     backup_idx = 0
     for p in PRIMARY_MODELS:
+        if p["seat"] not in active_seats:
+            continue
         if p["alive"] and _is_available(p["id"]):
+            p["replaced_by"] = None
             out.append(p); used.add(p["id"]); continue
-        # find a replacement
         replacement = None
         while backup_idx < len(BACKUP_MODELS):
             b = BACKUP_MODELS[backup_idx]
@@ -330,7 +422,9 @@ def lineup_alive() -> list[dict]:
             if b["id"] in used: continue
             if not _is_available(b["id"]): continue
             if not b["alive"]: continue
-            replacement = b; used.add(b["id"])
+            replacement = dict(b)
+            replacement["seat"] = p["seat"]
+            used.add(b["id"])
             break
         if replacement:
             p["replaced_by"] = replacement["id"]
@@ -343,7 +437,8 @@ def lineup_alive() -> list[dict]:
 def model_view(m: dict) -> dict:
     return {
         "id": m["id"], "vendor": m["vendor"], "family": m["family"],
-        "role": m["role"], "alive": m["alive"],
+        "role": m["role"], "seat": m.get("seat"),
+        "alive": m["alive"],
         "est_size_gb": m["est_size_gb"],
         "last_call_ms": m["last_call_ms"], "last_label": m["last_label"],
         "success": m["success"], "fail": m["fail"],
@@ -438,29 +533,64 @@ def probe_ollama() -> dict:
     }
 
 
-def _health_prompt(sat: dict, wx: dict) -> str:
+def _sat_context(sat: dict, wx: dict) -> str:
     return (
         f"Satellite {sat['name']} ({sat['regime']}, op {sat['operator']}). "
         f"Age {sat_age_years(sat):.1f}y of {sat['design_life_years']}y design life. "
+        f"Altitude {sat['altitude_km']} km. "
         f"TID {sat['tid_accumulated_krad']:.1f}/{sat['tid_budget_krad']:.0f} krad. "
         f"SEEs (30d): {sat['see_events_30d']}. "
-        f"Weather: Kp {wx['kp']}, X-ray {wx['xray_class']}, SEP {wx['sep_pfu']} pfu. "
-        f"Output ONLY one word from {{GREEN, YELLOW, RED, BLACK}} — the operational health."
+        f"Space weather: Kp {wx['kp']}, X-ray {wx['xray_class']}, SEP {wx['sep_pfu']} pfu, AE {wx['ae']} nT."
     )
 
 
-def _model_ask(model: dict, prompt: str, timeout: float = 15.0) -> dict | None:
-    """One Ollama call against a specific model. Updates model bookkeeping
-    (success / fail / latency / consecutive_fail). Returns parsed label or None.
+def _seat_prompt(seat: str, sat: dict, wx: dict) -> str:
+    """Role-specific prompt — replaces generic majority voting per
+    docs/RISKS_AND_FIXES.md 'Five models can cost more without adding trust'.
     """
+    role = next((s for s in COUNCIL_SEATS if s["seat"] == seat), None)
+    if role is None:
+        role_question = "Output ONLY one word from {GREEN, YELLOW, RED, BLACK} — the operational attention level."
+    else:
+        role_question = role["prompt"] + " Output ONLY one word from {GREEN, YELLOW, RED, BLACK} — your attention level."
+    return _sat_context(sat, wx) + "\n\nROLE: " + (role["title"] if role else seat) + "\n" + role_question
+
+
+def _gpu_pressure_ok() -> tuple[bool, float | None]:
+    """Pre-flight check before each Ollama call. Returns (ok_to_call, pct_used).
+    Honours GPU_BLOCK_PCT — if VRAM is above that, defer this call.
+    """
+    gpu = INFERENCE.get("host_gpu") or host_gpu_snapshot()
+    INFERENCE["host_gpu"] = gpu
+    if not gpu or not gpu.get("mem_total_mib"):
+        return True, None
+    pct = 100.0 * gpu["mem_used_mib"] / gpu["mem_total_mib"]
+    if pct >= GPU_BLOCK_PCT:
+        return False, pct
+    return True, pct
+
+
+def _model_ask(model: dict, prompt: str, timeout: float = 15.0,
+               system: str | None = None, num_predict: int = 256) -> dict | None:
+    """One sequential Ollama call. VRAM pre-flight gates the call; on
+    sustained failure the model is marked DEAD and the council resolver
+    swaps in a backup."""
+    ok, vram_pct = _gpu_pressure_ok()
+    if not ok:
+        INFERENCE["vram_gated_count"] += 1
+        BUS.alert("MED",
+            f"VRAM {vram_pct:.0f}% — deferring call to {model['id']} (block at {GPU_BLOCK_PCT:.0f}%)",
+            None)
+        return None
     body = {
         "model": _resolve_id(model["id"]),
         "messages": [
-            {"role": "system", "content": "You are a spacecraft operations health classifier. Reply with one word only from {GREEN, YELLOW, RED, BLACK}."},
-            {"role": "user",   "content": prompt},
+            {"role": "system",
+             "content": system or "You are a satellite operations attention-level classifier. Output one word only from {GREEN, YELLOW, RED, BLACK}."},
+            {"role": "user", "content": prompt},
         ],
         "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 256},
+        "options": {"temperature": 0.0, "num_predict": num_predict},
     }
     resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=timeout)
     model["last_call_ms"] = round(ms, 1)
@@ -470,8 +600,9 @@ def _model_ask(model: dict, prompt: str, timeout: float = 15.0) -> dict | None:
         INFERENCE["live_failures"] += 1
         if model["consecutive_fail"] >= CONSECUTIVE_FAIL_THRESHOLD and model["alive"]:
             model["alive"] = False
-            BUS.alert("HIGH", f"model {model['id']} marked DEAD after {model['fail']} failures — swapping to backup", None)
-            BUS.copilot("nemoclaw", f"Model {model['id']} ({model['vendor']}) failed too often; rotating to backup.")
+            BUS.alert("HIGH",
+                f"model {model['id']} marked DEAD after {model['fail']} failures — swapping seat to backup",
+                None)
         return None
     INFERENCE["live_calls"] += 1
     model["success"] += 1
@@ -487,22 +618,25 @@ def _model_ask(model: dict, prompt: str, timeout: float = 15.0) -> dict | None:
 
 
 def live_lineup_vote(sat: dict, wx: dict) -> list[dict] | None:
-    """Ask every model in the current lineup. Returns a list of vote dicts or
-    None if mode isn't live. Dead/missing models are simply skipped (their
-    placeholder still appears in the snapshot view)."""
+    """Sequentially poll each specialist seat for the focused sat. Each seat
+    gets its role-specific prompt (not a shared one). Nemotron Director is
+    invoked separately in `assess_sat`. Returns None in SIM mode.
+    """
     if INFERENCE["mode"] != "LIVE-OLLAMA":
         return None
-    prompt = _health_prompt(sat, wx)
     lineup = lineup_alive()
     votes: list[dict] = []
     t_lineup = 0.0
     for m in lineup:
         if not (m["alive"] and _is_available(m["id"])):
             continue
+        prompt = _seat_prompt(m["seat"], sat, wx)
         result = _model_ask(m, prompt)
         t_lineup += m["last_call_ms"] or 0.0
         if result and result["label"]:
             votes.append({
+                "seat": m["seat"],
+                "seat_title": next((s["title"] for s in COUNCIL_SEATS if s["seat"] == m["seat"]), m["seat"]),
                 "model": m["id"], "vendor": m["vendor"], "family": m["family"],
                 "label": result["label"], "ms": m["last_call_ms"],
                 "live": True,
@@ -545,6 +679,14 @@ def inference_view() -> dict:
         "host_gpu": INFERENCE["host_gpu"],
         "last_assess_ts": INFERENCE.get("last_assess_ts"),
         "last_lineup_call_ms": INFERENCE.get("last_lineup_call_ms"),
+        "vram_gated_count": INFERENCE.get("vram_gated_count", 0),
+        "director_calls": INFERENCE.get("director_calls", 0),
+        "director_last_ms": INFERENCE.get("director_last_ms"),
+        "council_mode": INFERENCE["council_mode"],
+        "council_modes": COUNCIL_MODES,
+        "council_seats": COUNCIL_SEATS,
+        "active_seats": _seats_for_mode(),
+        "director": model_view(MISSION_DIRECTOR),
         "lineup": [model_view(m) for m in lineup_alive()],
         "primary": [model_view(m) for m in PRIMARY_MODELS],
         "backup":  [model_view(m) for m in BACKUP_MODELS],
@@ -606,53 +748,48 @@ def assessor_vote(model: dict, sat: dict, wx: dict) -> tuple[str, float]:
     return label, score
 
 
-def arbiter_call(sat: dict, wx: dict, votes: list[dict]) -> dict | None:
-    """T2 escalation. Triggered when ensemble disagreement >= 2 distinct labels.
-
-    Sends a longer prompt with the existing votes laid out, asks the arbiter
-    to weigh them, and returns its single overriding label + rationale.
+def director_call(sat: dict, wx: dict, votes: list[dict]) -> dict | None:
+    """Nemotron Mission Director — fixed centre seat. ALWAYS runs after the
+    specialist council, not just on disagreement. Writes the final
+    recommendation that ends up in the mission brief.
     """
     if INFERENCE["mode"] != "LIVE-OLLAMA":
         return None
-    arbiter_id = "nemotron-3-nano:4b"
-    if not _is_available(arbiter_id):
+    if not _is_available(MISSION_DIRECTOR["id"]):
         return None
     vote_lines = "\n".join(
-        f"- {v.get('vendor','?')} {v.get('model','?')}: {v['label']}"
+        f"- {v.get('seat_title','?')} ({v.get('vendor','?')} {v.get('model','?')}): {v['label']}"
         for v in votes
     )
+    unique_labels = sorted({v["label"] for v in votes if v.get("label")})
+    disagreement = len(unique_labels) >= 2
     prompt = (
-        f"You are the T2 arbiter for satellite operations. Five T1 specialists just voted on "
-        f"{sat['name']} ({sat['regime']}, op {sat['operator']}). Their votes were:\n{vote_lines}\n\n"
-        f"Context: age {sat_age_years(sat):.1f}/{sat['design_life_years']}y, "
-        f"TID {sat['tid_accumulated_krad']:.1f}/{sat['tid_budget_krad']:.0f} krad, "
-        f"SEEs(30d)={sat['see_events_30d']}, "
-        f"Kp {wx['kp']}, X-ray {wx['xray_class']}, SEP {wx['sep_pfu']} pfu.\n\n"
-        f"Adjudicate. Reply ONLY one word from {{GREEN, YELLOW, RED, BLACK}}."
+        f"You are the Mission Director adjudicating a Spaceshark round-table session.\n"
+        f"SUBJECT: {sat['name']} ({sat['regime']}, op {sat['operator']}).\n"
+        f"CONTEXT: age {sat_age_years(sat):.1f}/{sat['design_life_years']}y · "
+        f"TID {sat['tid_accumulated_krad']:.1f}/{sat['tid_budget_krad']:.0f} krad · "
+        f"SEE(30d) {sat['see_events_30d']} · "
+        f"Kp {wx['kp']} · X-ray {wx['xray_class']} · SEP {wx['sep_pfu']} pfu.\n"
+        f"COUNCIL VOTES ({len(votes)} specialists):\n{vote_lines}\n\n"
+        f"{'Specialists disagree — resolve.' if disagreement else 'Specialists are aligned — confirm or refine.'}\n"
+        f"Output ONE WORD attention level from {{GREEN, YELLOW, RED, BLACK}}. "
+        f"This is advisory triage on public-data evidence — NOT a spacecraft command."
     )
-    body = {
-        "model": _resolve_id(arbiter_id),
-        "messages": [
-            {"role": "system", "content": "You are a Tier-2 arbiter for spacecraft health. Resolve disagreement between Tier-1 specialists. Output one word only."},
-            {"role": "user",   "content": prompt},
-        ],
-        "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 400},
-    }
-    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=25.0)
-    if resp is None:
+    result = _model_ask(
+        MISSION_DIRECTOR, prompt,
+        timeout=30.0, num_predict=400,
+        system="You are the Mission Director for a satellite operations advisory desk. Combine specialist votes with public-data evidence; output one word.",
+    )
+    if not result:
         return None
-    INFERENCE["live_calls"] += 1
-    msg = resp.get("message") or {}
-    content = (msg.get("content") or "").strip()
-    thinking = (msg.get("thinking") or "").strip()
-    haystack = (content + " " + thinking).upper()
-    label = next((k for k in ("BLACK", "RED", "YELLOW", "GREEN") if k in haystack), None)
+    INFERENCE["director_calls"] += 1
+    INFERENCE["director_last_ms"] = MISSION_DIRECTOR["last_call_ms"]
     return {
-        "label": label,
-        "rationale": (thinking or content)[:400],
-        "ms": round(ms, 1),
-        "model": arbiter_id,
+        "label": result["label"],
+        "rationale": (result.get("thinking") or result.get("content") or "")[:500],
+        "ms": MISSION_DIRECTOR["last_call_ms"],
+        "model": MISSION_DIRECTOR["id"],
+        "disagreement": disagreement,
     }
 
 
@@ -695,14 +832,19 @@ def assess_sat(sat: dict, wx: dict) -> dict:
     transition = None
     age, tid, see, wxf = base_factors(sat, wx)
 
-    # T2 ARBITER: escalate when ≥2 unique labels among the live votes (real
-    # ensemble disagreement, not noise). Arbiter overrides the median.
+    # MISSION DIRECTOR: Nemotron always sits at the head of the table and
+    # writes the final call. Specialists are inputs; the Director's label is
+    # what the operator sees in the brief.
     arbiter = None
-    live_labels = {v["label"] for v in votes if v.get("live")}
-    if len(live_labels) >= 2:
-        arbiter = arbiter_call(sat, wx, [v for v in votes if v.get("live")])
+    live_votes = [v for v in votes if v.get("live")]
+    if len(live_votes) >= 1:
+        arbiter = director_call(sat, wx, live_votes)
         if arbiter and arbiter["label"]:
             median_label = arbiter["label"]
+
+    # Insufficient council marker (docs/RISKS_AND_FIXES.md "Minimum council
+    # size should be three models").
+    insufficient = len(live_votes) > 0 and len(live_votes) < 3
 
     sat["health"] = median_label
     sat["score"] = round(median_score, 3)
@@ -712,7 +854,8 @@ def assess_sat(sat: dict, wx: dict) -> dict:
 
     # Build the mission brief for this round (round-table session).
     brief = build_mission_brief(sat, wx, votes, arbiter, transition,
-                                {"age": age, "tid": tid, "see": see, "weather": wxf})
+                                {"age": age, "tid": tid, "see": see, "weather": wxf},
+                                insufficient=insufficient)
 
     return {
         "votes": votes,
@@ -731,23 +874,27 @@ def assess_sat(sat: dict, wx: dict) -> dict:
     }
 
 
-def build_mission_brief(sat, wx, votes, arbiter, transition, factors):
-    """Structured, traceable summary of a round-table session. Maps to the
-    'mission brief' deliverable the operator can review and approve."""
+def build_mission_brief(sat, wx, votes, arbiter, transition, factors, insufficient=False):
+    """Structured, traceable summary of a round-table session.
+
+    Uses **advisory triage language** (docs/RISKS_AND_FIXES.md "satellite
+    health can overclaim"). Labels map:
+        GREEN  → STABLE       (no action)
+        YELLOW → ROUTINE       (monitor)
+        RED    → PRIORITY      (high-priority review)
+        BLACK  → EOL-CANDIDATE (review for EOL)
+    """
     label = sat["health"]
     counts = {"GREEN": 0, "YELLOW": 0, "RED": 0, "BLACK": 0}
     for v in votes:
         counts[v["label"]] = counts.get(v["label"], 0) + 1
-    # Action recommendation based on consensus + driver
-    if label == "BLACK":
-        action = "RETIRE"
-    elif label == "RED":
-        action = "SAFE-MODE"
-    elif label == "YELLOW":
-        action = "MONITOR"
-    else:
-        action = "NOMINAL"
-    # Provenance row matching docs/EVENT_SCHEMA.md v1.0
+    attention = {"GREEN": "STABLE", "YELLOW": "ROUTINE", "RED": "PRIORITY", "BLACK": "EOL-CANDIDATE"}[label]
+    action = {
+        "GREEN":  "STABLE — no action",
+        "YELLOW": "ROUTINE REVIEW",
+        "RED":    "HIGH-PRIORITY REVIEW",
+        "BLACK":  "REVIEW FOR EOL",
+    }[label]
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     payload = f"{sat['id']}|{label}|{now}|{factors}"
     evidence_hash = hashlib.sha256(payload.encode()).hexdigest()
@@ -758,23 +905,28 @@ def build_mission_brief(sat, wx, votes, arbiter, transition, factors):
         "operator": sat["operator"],
         "shell": sat.get("shell"),
         "synopsis": _brief_synopsis(sat, label, transition, factors),
-        "health": label,
+        "health": label,                # internal label (preserved for backward compat)
+        "attention_level": attention,   # operator-facing wording
         "transition": transition,
+        "insufficient_council": insufficient,
         "votes": [{"model": v.get("model"), "vendor": v.get("vendor"),
+                   "seat": v.get("seat"), "seat_title": v.get("seat_title"),
                    "label": v["label"], "ms": v.get("ms"), "live": v.get("live")}
                   for v in votes],
         "vote_counts": counts,
-        "arbiter": arbiter,            # None or {label, rationale, ms, model}
+        "director": arbiter,            # None or {label, rationale, ms, model, disagreement}
+        "arbiter": arbiter,             # alias kept for backward compat
         "drivers": factors,
         "weather": wx,
         "action": action,
+        "caveat": "Based on public orbit + environment evidence only — not spacecraft telemetry.",
         "provenance": {
             "event_id": f"on-orbit-ops-{sat['id']}-{now.replace(':','').replace('-','')}-{evidence_hash[:8]}",
             "evidence_hash": evidence_hash,
-            "parser_version": "0.3.0",
+            "parser_version": "0.4.0",
             "ts": now,
         },
-        "review_status": "draft" if action in ("SAFE-MODE", "RETIRE") else "internal-log-only",
+        "review_status": "draft" if label in ("RED", "BLACK") else "internal-log-only",
     }
 
 
@@ -858,6 +1010,9 @@ class Bus:
         self._lock = threading.Lock()
         self.alerts: deque = deque(maxlen=60)
         self.copilot_log: deque = deque(maxlen=80)
+        self.inbox: deque = deque(maxlen=120)      # Mission Inbox items
+        self.inbox_seq = 0
+        self.last_inbox_ts: dict[str, float] = {}  # sat_id -> last push timestamp (cooldown)
         self.start_ts = time.time()
         self.focused_sat: str = SATS[0]["id"]
 
@@ -892,20 +1047,20 @@ class Bus:
             "tokens": token_view(),
             "inference": inference_view(),
             "assessors": [{"id": a["id"], "family": a["family"], "bias": a["bias"]} for a in ASSESSORS],
-            "copilot": list(self.copilot_log),
+            "inbox": list(self.inbox),
             "alerts": list(self.alerts),
+            "council_modes": COUNCIL_MODES,
+            "council_seats": COUNCIL_SEATS,
+            "council_mode": INFERENCE["council_mode"],
+            "visual_catalog_size": len(VISUAL_CATALOG),
             "uptime_s": int(time.time() - self.start_ts),
         }
 
     def copilot(self, who: str, msg: str, **extra) -> None:
-        entry = {
-            "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-            "who": who,
-            "msg": msg,
-            **extra,
-        }
-        self.copilot_log.append(entry)
-        self.publish({"type": "copilot", "entry": entry})
+        """Retired — the chat-style copilot stream was replaced by the
+        Mission Inbox + alerts (see docs/RISKS_AND_FIXES.md P0). Kept as a
+        no-op so legacy call sites don't crash."""
+        return None
 
     def alert(self, severity: str, message: str, sat_id: str | None = None) -> None:
         a = {
@@ -916,6 +1071,51 @@ class Bus:
         }
         self.alerts.append(a)
         self.publish({"type": "alert", "alert": a})
+
+    def push_inbox(self, brief: dict) -> bool:
+        """Add a brief to the persistent Mission Inbox if cooldown allows.
+        Returns True if pushed, False if suppressed by cooldown.
+        Per docs/RISKS_AND_FIXES.md: same sat cannot push within 5 minutes
+        for the same severity tier."""
+        sat_id = brief["subject_id"]
+        attn = brief.get("attention_level")
+        # Only PRIORITY / EOL items hit the inbox by default; STABLE/ROUTINE
+        # accumulate silently in the assessment log.
+        if attn not in ("PRIORITY", "EOL-CANDIDATE"):
+            return False
+        key = f"{sat_id}|{attn}"
+        now_ts = time.time()
+        last = self.last_inbox_ts.get(key, 0)
+        if now_ts - last < INBOX_COOLDOWN_S:
+            return False
+        self.last_inbox_ts[key] = now_ts
+        self.inbox_seq += 1
+        item = {
+            "inbox_id": self.inbox_seq,
+            "ts": brief["provenance"]["ts"],
+            "sat_id": sat_id,
+            "subject": brief["subject"],
+            "regime": brief["regime"],
+            "shell": brief.get("shell"),
+            "attention_level": attn,
+            "health": brief["health"],
+            "action": brief["action"],
+            "vote_counts": brief["vote_counts"],
+            "director": brief.get("director"),
+            "provenance": brief["provenance"],
+            "state": "NEW",            # NEW | REVIEWED | DISMISSED
+        }
+        self.inbox.append(item)
+        self.publish({"type": "inbox", "item": item, "inbox_size": len(self.inbox)})
+        return True
+
+    def inbox_set_state(self, inbox_id: int, state: str) -> bool:
+        for it in self.inbox:
+            if it["inbox_id"] == inbox_id:
+                it["state"] = state
+                self.publish({"type": "inbox", "item": it, "inbox_size": len(self.inbox)})
+                return True
+        return False
 
 
 BUS = Bus()
@@ -1091,18 +1291,14 @@ def assessment_loop() -> None:
                 continue
             assessment = assess_sat(sat, wx)
 
-            # surface transitions to copilot + alerts
+            # surface transitions to alerts + Mission Inbox (no chat popups)
             if assessment["transition"]:
                 sev = {"GREEN": "INFO", "YELLOW": "MED", "RED": "HIGH", "BLACK": "HIGH"}[sat["health"]]
                 BUS.alert(sev, f"{sat['name']} {assessment['transition']} (consensus {assessment['consensus_pct']}%)", sat["id"])
-                if sat["health"] in ("RED", "BLACK"):
-                    BUS.copilot("nemoclaw",
-                        f"{sat['name']} now {sat['health']} (consensus {assessment['consensus_pct']}%). "
-                        f"Driver: age {assessment['factors']['age']:.2f} · TID {assessment['factors']['tid']:.2f} · "
-                        f"weather {assessment['factors']['weather']:.2f}. "
-                        f"Recommend operator review.",
-                        sat_id=sat["id"],
-                        recommendation=("RETIRE" if sat["health"] == "BLACK" else "SAFE-MODE"))
+            # Always offer the brief to the inbox; push_inbox enforces
+            # severity gate + cooldown internally.
+            if assessment.get("brief"):
+                BUS.push_inbox(assessment["brief"])
 
             # write event row matching docs/EVENT_SCHEMA.md
             ev = {
@@ -1141,29 +1337,12 @@ def assessment_loop() -> None:
 
 
 def copilot_loop() -> None:
-    """Inject the occasional operator command and proactive recommendation."""
-    operator_commands = [
-        "Status report for the worst-health sat.",
-        "Any LEO drag concerns this hour?",
-        "Token burn looking reasonable?",
-        "Run conjunction triage on Starlink shell.",
-        "What's the consensus on NOAA-18?",
-    ]
-    time.sleep(4)
+    """No-op (kept for backwards compatibility). The synthetic operator/AI
+    chat was retired per docs/RISKS_AND_FIXES.md P0 "Recommendation should
+    not keep popping up" — recommendations now land in the Mission Inbox
+    with cooldown, not in an interrupt-style text stream."""
     while True:
-        if _RUN_FLAG["value"]:
-            cmd = random.choice(operator_commands)
-            BUS.copilot("user", cmd, who_label="Sampras")
-            time.sleep(random.uniform(2, 5))
-            # synthesize a response based on current state
-            worst = sorted(SATS, key=lambda s: -s["score"])[0]
-            wx = WEATHER.snapshot()
-            BUS.copilot("nemoclaw",
-                f"Worst-health: {worst['name']} ({worst['health']}, score {worst['score']:.2f}). "
-                f"Kp {wx['kp']}, X-ray {wx['xray_class']}, SEP {wx['sep_pfu']} pfu. "
-                f"Fleet: {fleet_health_counts()}.",
-                sat_id=worst["id"])
-        time.sleep(random.uniform(20, 35))
+        time.sleep(60)
 
 
 def token_history_loop() -> None:
@@ -1371,6 +1550,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/styles.css":         self._send_file(WEB / "styles.css", "text/css; charset=utf-8"); return
         if path == "/app.js":             self._send_file(WEB / "app.js", "application/javascript; charset=utf-8"); return
         if path == "/api/state":          self._send_json(BUS.snapshot()); return
+        if path == "/api/catalog":        self._send_json({"catalog": VISUAL_CATALOG, "size": len(VISUAL_CATALOG)}); return
         if path == "/api/stream":         self._serve_sse(); return
         self.send_error(404)
 
@@ -1439,6 +1619,27 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"error": "Ollama not ready", "detail": result}, status=409); return
             BUS.publish({"type": "inference", "inference": inference_view()})
             self._send_json({"mode": INFERENCE["mode"]}); return
+        if self.path == "/api/council-mode":
+            mode = (body.get("mode") or "").upper()
+            if mode not in COUNCIL_MODES:
+                self._send_json({"error": "unknown mode", "valid": list(COUNCIL_MODES.keys())}, status=400)
+                return
+            INFERENCE["council_mode"] = mode
+            BUS.publish({"type": "inference", "inference": inference_view()})
+            self._send_json({"ok": True, "mode": mode})
+            return
+        if self.path.startswith("/api/inbox/"):
+            try:
+                _, _, _, inbox_id_str, op = self.path.split("/")
+                inbox_id = int(inbox_id_str)
+            except (ValueError, IndexError):
+                self._send_json({"error": "bad inbox path"}, status=400); return
+            state = "REVIEWED" if op == "accept" else "DISMISSED" if op == "dismiss" else None
+            if state is None:
+                self._send_json({"error": "use /accept or /dismiss"}, status=400); return
+            ok = BUS.inbox_set_state(inbox_id, state)
+            self._send_json({"ok": ok, "state": state})
+            return
         self.send_error(404)
 
 

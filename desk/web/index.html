@@ -6,7 +6,7 @@
 <title>Spaceshark</title>
 <link rel="stylesheet" href="/styles.css" />
 </head>
-<body>
+<body data-layout="ANALYSIS">
 
 <!-- ====================== TOP BAR ====================== -->
 <header class="topbar">
@@ -23,33 +23,45 @@
     </div>
   </div>
   <div class="ops-strip">
-    <div class="ops-meter" title="AI advisor daily token usage (Nimble Cloud cap)">
+    <div class="council-picker" title="Council size — Eco (3) / Balanced (4) / Full (5)">
+      <span class="meter-label">COUNCIL</span>
+      <div class="council-buttons" id="council-buttons">
+        <button class="cb-btn" data-mode="ECO">ECO · 3</button>
+        <button class="cb-btn" data-mode="BALANCED">BAL · 4</button>
+        <button class="cb-btn" data-mode="FULL">FULL · 5</button>
+      </div>
+      <span class="meter-sub" id="council-desc">—</span>
+    </div>
+    <div class="ops-meter" title="AI advisor daily token usage">
       <span class="meter-label">AI ADVISORS</span>
       <div class="meter">
         <i id="token-bar" class="meter-fill"></i>
-        <span class="meter-tick" style="left:25%"></span>
-        <span class="meter-tick" style="left:50%"></span>
-        <span class="meter-tick" style="left:75%"></span>
       </div>
       <span class="meter-val"><b id="token-spent">0</b> / <span id="token-quota">0</span></span>
-      <span class="meter-sub"><b id="token-pct">0.0%</b> · <span id="token-rate">0</span>/min</span>
     </div>
     <div class="ops-fleet">
-      <span class="meter-label">FLEET HEALTH</span>
+      <span class="meter-label">FLEET TRIAGE</span>
       <div class="dot-row">
-        <span class="health-pill health-GREEN"><i></i><b id="fh-green">0</b></span>
-        <span class="health-pill health-YELLOW"><i></i><b id="fh-yellow">0</b></span>
-        <span class="health-pill health-RED"><i></i><b id="fh-red">0</b></span>
-        <span class="health-pill health-BLACK"><i></i><b id="fh-black">0</b></span>
+        <span class="health-pill health-GREEN"  title="STABLE"><i></i><b id="fh-green">0</b></span>
+        <span class="health-pill health-YELLOW" title="ROUTINE"><i></i><b id="fh-yellow">0</b></span>
+        <span class="health-pill health-RED"    title="PRIORITY"><i></i><b id="fh-red">0</b></span>
+        <span class="health-pill health-BLACK"  title="EOL-CANDIDATE"><i></i><b id="fh-black">0</b></span>
       </div>
     </div>
     <div class="ops-director">
       <span class="dir-line">COMMANDER <b>Sampras</b></span>
-      <span class="dir-line">FOCUS <b id="focus-name">--</b> · HEALTH <b id="focus-health">--</b></span>
-      <span class="dir-line" id="gpu-line">GPU <b id="gpu-name">—</b> · UTIL <b id="gpu-util">—</b> · MEM <b id="gpu-mem">—</b></span>
+      <span class="dir-line">FOCUS <b id="focus-name">--</b> · <b id="focus-attn">--</b></span>
+      <span class="dir-line" id="gpu-line">GPU <b id="gpu-name">—</b> · <b id="gpu-util">—</b> · <b id="gpu-mem">—</b></span>
     </div>
+    <button class="layout-toggle" id="layout-toggle" title="Toggle Earth-heavy ↔ Analysis-heavy">⌬ EARTH MODE</button>
   </div>
 </header>
+
+<!-- ====================== CAVEAT STRIP ====================== -->
+<div class="caveat-strip">
+  <span>⚑</span>
+  <span><b>ADVISORY TRIAGE</b> based on public orbit + space-weather evidence only — NOT spacecraft telemetry, NOT spacecraft commands. The Mission Director's recommendations are review items, not actions.</span>
+</div>
 
 <!-- ====================== MAIN GRID ====================== -->
 <main class="grid">
@@ -57,7 +69,7 @@
   <!-- =========== LEFT: FLEET LIST =========== -->
   <section class="panel panel-fleet">
     <header>
-      <span class="panel-title">FLEET</span>
+      <span class="panel-title">FLEET · ACTIVE TRIAGE</span>
       <span class="panel-sub" id="fleet-count">0 sats</span>
     </header>
     <div class="fleet-filters" id="fleet-filters">
@@ -69,13 +81,17 @@
       <button class="ff-btn"        data-filter="WARN">⚠ WARN</button>
     </div>
     <ol class="fleet-list" id="fleet-list"></ol>
+    <div class="fleet-foot">
+      <span>VISUAL CATALOG <b id="catalog-size">—</b> objects</span>
+      <span>(unassessed = grey)</span>
+    </div>
   </section>
 
   <!-- =========== CENTER TOP: ROUND TABLE =========== -->
   <section class="panel panel-roundtable">
     <header>
-      <span class="panel-title">ROUND TABLE</span>
-      <span class="panel-sub" id="rt-status">awaiting advisors…</span>
+      <span class="panel-title">SPECIALIST COUNCIL ROUND TABLE</span>
+      <span class="panel-sub" id="rt-status">awaiting council…</span>
     </header>
     <div class="roundtable-wrap">
       <svg id="roundtable" viewBox="0 0 480 360" preserveAspectRatio="xMidYMid meet"></svg>
@@ -83,16 +99,23 @@
     <div class="rt-tally" id="rt-tally"></div>
   </section>
 
-  <!-- =========== RIGHT: MISSION BRIEF =========== -->
-  <section class="panel panel-brief">
+  <!-- =========== RIGHT: MISSION INBOX =========== -->
+  <section class="panel panel-inbox">
     <header>
-      <span class="panel-title">MISSION BRIEF</span>
-      <span class="panel-sub" id="brief-ts">—</span>
+      <span class="panel-title">MISSION INBOX</span>
+      <span class="panel-sub"><b id="inbox-new">0</b> NEW · <span id="inbox-total">0</span> total · 5-min cooldown</span>
     </header>
-    <div class="brief" id="brief"></div>
-    <div class="brief-actions">
-      <button class="btn-approve" id="btn-approve">APPROVE BRIEF</button>
-      <button class="btn-review"  id="btn-review">DIVE DEEPER</button>
+    <ol class="inbox-list" id="inbox-list"></ol>
+    <div class="brief-panel" id="brief-panel" hidden>
+      <div class="brief-panel-head">
+        <span class="panel-title">BRIEF</span>
+        <button class="brief-close" id="brief-close">close</button>
+      </div>
+      <div class="brief" id="brief"></div>
+      <div class="brief-actions">
+        <button class="btn-accept"  id="btn-accept">ACCEPT BRIEF ITEM</button>
+        <button class="btn-dismiss" id="btn-dismiss">DISMISS</button>
+      </div>
     </div>
   </section>
 
@@ -100,7 +123,7 @@
   <section class="panel panel-earth">
     <header>
       <span class="panel-title">ORBITAL TRAJECTORY</span>
-      <span class="panel-sub">Starlink-focused · health-coloured</span>
+      <span class="panel-sub"><span id="earth-count">—</span> objects · click globe for detail</span>
     </header>
     <div class="earth-wrap">
       <svg id="earth" viewBox="0 0 800 520" preserveAspectRatio="xMidYMid meet">
@@ -140,6 +163,7 @@
           <ellipse class="orbit orbit-MEO" cx="400" cy="260" rx="290" ry="135"/>
           <ellipse class="orbit orbit-GEO" cx="400" cy="260" rx="370" ry="195"/>
         </g>
+        <g id="catalog-layer"></g>
         <g id="sat-layer"></g>
         <g id="focus-overlay"></g>
       </svg>
@@ -175,20 +199,13 @@
         <b class="tel-val tel-a" id="tel-sig-val">--</b>
       </div>
     </div>
-    <div class="chevrons mini" id="lifecycle">
-      <div class="chev" data-stage="Pre-Launch"><span>Pre</span></div>
-      <div class="chev" data-stage="In-Orbit Operations"><span>In-Orbit</span></div>
-      <div class="chev" data-stage="Event Management"><span>Event</span></div>
-      <div class="chev" data-stage="Deorbiting / Disposal"><span>Deorbit</span></div>
-      <div class="chev" data-stage="Decommissioned"><span>End</span></div>
-    </div>
   </section>
 
   <!-- =========== BOTTOM RIGHT: LINEUP =========== -->
   <section class="panel panel-lineup">
     <header>
       <span class="panel-title">ADVISOR LINEUP</span>
-      <span class="panel-sub" id="lineup-sub">0/5 alive</span>
+      <span class="panel-sub" id="lineup-sub">0/0 seats</span>
     </header>
     <table class="lineup-tbl" id="lineup-tbl"><tbody></tbody></table>
   </section>

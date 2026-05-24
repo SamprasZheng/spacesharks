@@ -1,35 +1,46 @@
 // Spaceshark Mission Commander — front-end.
-// Pentagonal round-table for the 5 AI advisors + structured mission-brief.
+// Round-table council + Nemotron Director + Mission Inbox + Earth-heavy mode.
 
 (() => {
   "use strict";
   const $   = (id) => document.getElementById(id);
   const svgNS = "http://www.w3.org/2000/svg";
-  const HEALTH_COLOR = { GREEN: "#3df0c8", YELLOW: "#ffd166", RED: "#ff6470", BLACK: "#2a2a2a" };
+  const HEALTH_COLOR = {
+    GREEN: "#3df0c8", YELLOW: "#ffd166", RED: "#ff6470", BLACK: "#2a2a2a",
+    UNKNOWN: "#4a5663",
+  };
+  const ATTENTION_OF = {
+    GREEN: "STABLE", YELLOW: "ROUTINE", RED: "PRIORITY", BLACK: "EOL-CANDIDATE",
+    UNKNOWN: "UNASSESSED",
+  };
 
   const els = {
     clock: $("clock"),
     inferBadge: $("infer-badge"), inferMode: $("infer-mode"), inferSub: $("infer-sub"),
     gpuName: $("gpu-name"), gpuUtil: $("gpu-util"), gpuMem: $("gpu-mem"),
-    tokenBar: $("token-bar"), tokenSpent: $("token-spent"),
-    tokenQuota: $("token-quota"), tokenPct: $("token-pct"), tokenRate: $("token-rate"),
+    tokenBar: $("token-bar"), tokenSpent: $("token-spent"), tokenQuota: $("token-quota"),
     fhGreen: $("fh-green"), fhYellow: $("fh-yellow"), fhRed: $("fh-red"), fhBlack: $("fh-black"),
-    focusName: $("focus-name"), focusHealth: $("focus-health"),
+    focusName: $("focus-name"), focusAttn: $("focus-attn"),
+    layoutToggle: $("layout-toggle"),
+
+    councilButtons: $("council-buttons"), councilDesc: $("council-desc"),
 
     fleetCount: $("fleet-count"), fleetList: $("fleet-list"), fleetFilters: $("fleet-filters"),
+    catalogSize: $("catalog-size"),
 
     rtSvg: $("roundtable"), rtStatus: $("rt-status"), rtTally: $("rt-tally"),
 
-    brief: $("brief"), briefTs: $("brief-ts"),
-    btnApprove: $("btn-approve"), btnReview: $("btn-review"),
+    inboxList: $("inbox-list"), inboxNew: $("inbox-new"), inboxTotal: $("inbox-total"),
+    briefPanel: $("brief-panel"), brief: $("brief"), briefClose: $("brief-close"),
+    btnAccept: $("btn-accept"), btnDismiss: $("btn-dismiss"),
 
     stars: $("stars"), continents: $("continents"), graticule: $("graticule"),
-    satLayer: $("sat-layer"), focusOverlay: $("focus-overlay"),
+    catalogLayer: $("catalog-layer"), satLayer: $("sat-layer"), focusOverlay: $("focus-overlay"),
+    earthCount: $("earth-count"),
 
     telSat: $("tel-sat"),
     telAlt: $("tel-alt"), telVel: $("tel-vel"), telSig: $("tel-sig"),
     telAltVal: $("tel-alt-val"), telVelVal: $("tel-vel-val"), telSigVal: $("tel-sig-val"),
-    lifecycle: $("lifecycle"),
 
     lineupSub: $("lineup-sub"), lineupTbl: $("lineup-tbl"),
   };
@@ -37,14 +48,18 @@
   const STATE = {
     sats: [],
     focused: null,
-    brief: null,
+    inbox: [],
+    selectedInbox: null,
     filter: "ALL",
+    council_mode: "BALANCED",
+    council_modes: {},
+    council_seats: [],
+    inference: null,
   };
 
   // ------------------------------------------------------------------ clock
   function tickClock() {
-    const d = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
+    const d = new Date(); const pad = (n) => String(n).padStart(2, "0");
     els.clock.textContent =
       `${d.toLocaleDateString("en-GB", { weekday: "short" }).toUpperCase()} ` +
       `${pad(d.getDate())} ${d.toLocaleDateString("en-GB", { month: "short" }).toUpperCase()} ` +
@@ -52,15 +67,41 @@
   }
   setInterval(tickClock, 1000); tickClock();
 
+  // ------------------------------------------------------------------ layout toggle
+  els.layoutToggle.addEventListener("click", () => {
+    const cur = document.body.dataset.layout;
+    document.body.dataset.layout = cur === "EARTH" ? "ANALYSIS" : "EARTH";
+    els.layoutToggle.textContent =
+      document.body.dataset.layout === "EARTH" ? "▣ ANALYSIS MODE" : "⌬ EARTH MODE";
+  });
+
+  // ------------------------------------------------------------------ council picker
+  els.councilButtons.querySelectorAll(".cb-btn").forEach(b => {
+    b.addEventListener("click", async () => {
+      const mode = b.dataset.mode;
+      await fetch("/api/council-mode", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+    });
+  });
+  function renderCouncilPicker(inf) {
+    if (!inf) return;
+    STATE.council_mode = inf.council_mode;
+    STATE.council_modes = inf.council_modes || {};
+    STATE.council_seats = inf.council_seats || [];
+    els.councilButtons.querySelectorAll(".cb-btn").forEach(b =>
+      b.classList.toggle("active", b.dataset.mode === inf.council_mode));
+    const cm = (inf.council_modes || {})[inf.council_mode];
+    els.councilDesc.textContent = cm ? cm.desc : "";
+  }
+
   // ------------------------------------------------------------------ top bar
   function renderTokens(t) {
     const pct = Math.min(100, t.pct || 0);
     els.tokenBar.style.width = pct + "%";
     els.tokenSpent.textContent = (t.spent || 0).toLocaleString();
     els.tokenQuota.textContent = (t.quota || 0).toLocaleString();
-    els.tokenPct.textContent   = (t.pct || 0).toFixed(2) + "%";
-    els.tokenRate.textContent  = (t.rate_tokens_per_min || 0).toLocaleString();
-    els.tokenPct.style.color = pct > 80 ? "var(--bad)" : pct > 50 ? "var(--warn)" : "var(--accent)";
   }
   function renderFleetHealth(f) {
     els.fhGreen.textContent  = f.GREEN  || 0;
@@ -68,24 +109,27 @@
     els.fhRed.textContent    = f.RED    || 0;
     els.fhBlack.textContent  = f.BLACK  || 0;
   }
-
   function renderInference(inf) {
     if (!inf) return;
+    STATE.inference = inf;
     const live = inf.mode === "LIVE-OLLAMA";
     els.inferBadge.classList.toggle("live", live);
     els.inferMode.textContent = inf.mode;
-    const alive = (inf.lineup || []).filter(m => m.alive && m.loaded);
+    const lineup = inf.lineup || [];
+    const alive = lineup.filter(m => m.alive && m.loaded);
     if (live) {
+      const dirMs = inf.director_last_ms ? `· dir ${inf.director_last_ms}ms ` : "";
       els.inferSub.textContent =
-        `${alive.length}/${(inf.lineup || []).length} advisors alive · ${inf.live_calls} calls`;
+        `${alive.length}/${lineup.length} seats · ${inf.live_calls} calls ${dirMs}· VRAM ${inf.host_gpu ? Math.round(100 * inf.host_gpu.mem_used_mib / inf.host_gpu.mem_total_mib) + "%" : "?"}`;
     } else {
-      els.inferSub.textContent = `${inf.available_models?.length || 0} ollama models reachable — click to go LIVE`;
+      els.inferSub.textContent = `${inf.available_models?.length || 0} models reachable — click to go LIVE`;
     }
     if (inf.host_gpu) {
-      els.gpuName.textContent = inf.host_gpu.name;
+      els.gpuName.textContent = inf.host_gpu.name.replace("NVIDIA GeForce ", "");
       els.gpuUtil.textContent = inf.host_gpu.util_pct + "%";
       els.gpuMem.textContent  = `${inf.host_gpu.mem_used_mib}/${inf.host_gpu.mem_total_mib} MiB`;
     }
+    renderCouncilPicker(inf);
     renderLineup(inf);
   }
   els.inferBadge.addEventListener("click", async () => {
@@ -97,27 +141,46 @@
   });
 
   function renderLineup(inf) {
+    const active = new Set(inf.active_seats || []);
+    const dir = inf.director;
     const all = (inf.primary || []).concat(inf.backup || []);
-    const alive = all.filter(m => m.alive && m.loaded).length;
-    els.lineupSub.textContent = `${alive}/${all.length} alive`;
+    const aliveCount = all.filter(m => m.alive && m.loaded && active.has(m.seat)).length;
+    const seatCount = (inf.active_seats || []).length;
+    els.lineupSub.textContent = `${aliveCount}/${seatCount} seats · DIR ${dir && dir.alive && dir.loaded ? "✓" : "—"}`;
     const fmt = (m) => {
       let state, klass;
-      if (!m.loaded)            { state = "not pulled"; klass = "miss"; }
-      else if (!m.alive)        { state = "DEAD";       klass = "dead"; }
-      else if (m.replaced_by)   { state = "→ "+m.replaced_by; klass = "swapped"; }
-      else                      { state = m.last_label || "ALIVE"; klass = "alive"; }
+      if (!m.loaded)              { state = "not pulled"; klass = "miss"; }
+      else if (!m.alive)          { state = "DEAD";       klass = "dead"; }
+      else if (m.replaced_by)     { state = "→ "+m.replaced_by; klass = "swapped"; }
+      else if (m.seat && !active.has(m.seat)) { state = "BENCHED"; klass = "bench"; }
+      else                        { state = m.last_label || "READY"; klass = "alive"; }
       const ms = m.last_call_ms ? ` ${m.last_call_ms}ms` : "";
-      return `<tr class="ln-role-${m.role} ${m.alive ? "" : "dead"}">
+      const benchedRow = m.seat && !active.has(m.seat) ? "bench" : "";
+      return `<tr class="${m.alive ? "" : "dead"} ${benchedRow}">
         <td><span class="ln-dot" style="background:${m.loaded ? (m.alive ? "var(--accent)" : "var(--bad)") : "var(--ink-faint)"}"></span>
-            <span class="ln-id">${escapeHtml(m.id)}</span></td>
+            <span class="ln-id">${escapeHtml(m.id)}</span>
+            <div class="ln-seat">${escapeHtml(m.seat || "")}</div></td>
         <td class="ln-vendor">${escapeHtml(m.vendor)}${ms}</td>
         <td class="ln-state ${klass}">${escapeHtml(state)}</td>
       </tr>`;
     };
     const rows = [];
-    rows.push(`<tr class="lineup-section"><td colspan="3">PRIMARY ${(inf.primary || []).filter(m => m.alive && m.loaded).length}/${(inf.primary || []).length}</td></tr>`);
+    if (dir) {
+      rows.push(`<tr class="lineup-section"><td colspan="3">DIRECTOR · Nemotron</td></tr>`);
+      const ds = dir.alive && dir.loaded ? "READY" : (dir.loaded ? "DEAD" : "not pulled");
+      const dk = dir.alive && dir.loaded ? "alive" : (dir.loaded ? "dead" : "miss");
+      const ms = dir.last_call_ms ? ` ${dir.last_call_ms}ms` : "";
+      rows.push(`<tr class="director-row">
+        <td><span class="ln-dot" style="background:${dir.loaded ? (dir.alive ? "var(--warn)" : "var(--bad)") : "var(--ink-faint)"}"></span>
+            <span class="ln-id">${escapeHtml(dir.id)}</span>
+            <div class="ln-seat">DIRECTOR</div></td>
+        <td class="ln-vendor">${escapeHtml(dir.vendor)}${ms}</td>
+        <td class="ln-state ${dk}">${ds}</td>
+      </tr>`);
+    }
+    rows.push(`<tr class="lineup-section"><td colspan="3">SPECIALISTS · ${seatCount} active</td></tr>`);
     (inf.primary || []).forEach(m => rows.push(fmt(m)));
-    rows.push(`<tr class="lineup-section"><td colspan="3">BACKUP ${(inf.backup || []).filter(m => m.alive && m.loaded).length}/${(inf.backup || []).length}</td></tr>`);
+    rows.push(`<tr class="lineup-section"><td colspan="3">BACKUP POOL</td></tr>`);
     (inf.backup || []).forEach(m => rows.push(fmt(m)));
     els.lineupTbl.querySelector("tbody").innerHTML = rows.join("");
   }
@@ -140,8 +203,7 @@
   }
   function renderFleet() {
     const list = STATE.sats.filter(matchesFilter);
-    // Sort: warn states first within filter, then by name
-    const order = { BLACK: 0, RED: 1, YELLOW: 2, GREEN: 3 };
+    const order = { BLACK: 0, RED: 1, YELLOW: 2, GREEN: 3, UNKNOWN: 4 };
     list.sort((a, b) => (order[a.health] - order[b.health]) || a.name.localeCompare(b.name));
     els.fleetCount.textContent = `${list.length} / ${STATE.sats.length}`;
     els.fleetList.innerHTML = list.map(s => `
@@ -151,7 +213,7 @@
           <div class="fl-name">${escapeHtml(s.name)}</div>
           <div class="fl-meta">${s.regime} · ${escapeHtml(s.shell || s.operator)}</div>
         </div>
-        <div class="fl-tag">${s.health}</div>
+        <div class="fl-tag">${ATTENTION_OF[s.health] || s.health}</div>
       </li>`).join("");
     els.fleetList.querySelectorAll("li").forEach(li =>
       li.addEventListener("click", () => focusSat(li.dataset.id))
@@ -165,175 +227,188 @@
     });
   }
 
-  // ------------------------------------------------------------------ round-table SVG
-  // 5 seats arranged at pentagon vertices around a central sat card.
-  const RT_CX = 240, RT_CY = 175, RT_RADIUS = 130;
-  const SEAT_POS = [0, 1, 2, 3, 4].map(i => {
-    const a = -Math.PI / 2 + i * (2 * Math.PI / 5);
-    return { x: RT_CX + Math.cos(a) * RT_RADIUS, y: RT_CY + Math.sin(a) * RT_RADIUS };
-  });
-  const ARBITER_POS = { x: RT_CX, y: 28 };
+  // ------------------------------------------------------------------ round-table
+  const RT_CX = 240, RT_CY = 195, RT_RADIUS = 130;
+  const DIR_POS = { x: RT_CX, y: 38 };
+  function seatPositions(n) {
+    return Array.from({ length: n }, (_, i) => {
+      const a = -Math.PI / 2 + i * (2 * Math.PI / n);
+      return { x: RT_CX + Math.cos(a) * RT_RADIUS, y: RT_CY + Math.sin(a) * RT_RADIUS };
+    });
+  }
 
   function renderRoundTable(focused, brief) {
     if (!focused) { els.rtSvg.innerHTML = ""; return; }
-    const votes = (brief && brief.votes) ? brief.votes.slice(0, 5) :
-                  (focused.assessment ? focused.assessment.votes.slice(0, 5) : []);
-    const arbiter = brief ? brief.arbiter : (focused.assessment ? focused.assessment.arbiter : null);
+    const votes = (brief && brief.votes) ? brief.votes :
+                  (focused.assessment ? focused.assessment.votes : []);
+    const director = brief ? brief.director : (focused.assessment ? focused.assessment.arbiter : null);
+    const activeSeats = (STATE.inference && STATE.inference.active_seats) || ["ORBIT","TRIAGE","EVIDENCE"];
+    const n = activeSeats.length;
+    const positions = seatPositions(n);
 
+    // central sat-card
+    const attn = ATTENTION_OF[focused.health] || focused.health;
     const center = `
       <g class="rt-center">
-        <rect x="${RT_CX - 70}" y="${RT_CY - 36}" width="140" height="72" rx="4"/>
-        <text class="ct-name"   x="${RT_CX}" y="${RT_CY - 14}" text-anchor="middle">${escapeHtml(focused.name)}</text>
-        <text class="ct-meta"   x="${RT_CX}" y="${RT_CY + 1}"  text-anchor="middle">${focused.regime}${focused.shell ? " · " + escapeHtml(focused.shell) : ""}</text>
+        <rect x="${RT_CX - 75}" y="${RT_CY - 36}" width="150" height="72" rx="4"/>
+        <text class="ct-name"   x="${RT_CX}" y="${RT_CY - 16}" text-anchor="middle">${escapeHtml(focused.name)}</text>
+        <text class="ct-meta"   x="${RT_CX}" y="${RT_CY - 2}"  text-anchor="middle">${focused.regime}${focused.shell ? " · " + escapeHtml(focused.shell) : ""}</text>
         <text class="ct-health" x="${RT_CX}" y="${RT_CY + 22}" text-anchor="middle"
-              style="fill:${HEALTH_COLOR[focused.health] || "#fff"}">${focused.health}</text>
+              style="fill:${HEALTH_COLOR[focused.health] || "#fff"}">${attn}</text>
       </g>`;
 
-    // edges from seats to center
-    const edges = SEAT_POS.map((p, i) => {
-      const cls = (votes[i] && votes[i].label) ? "active" : "";
-      return `<line class="rt-edge ${cls}" x1="${p.x}" y1="${p.y}" x2="${RT_CX}" y2="${RT_CY - 4}"/>`;
+    // edges
+    const edges = positions.map((p) => {
+      return `<line class="rt-edge active" x1="${p.x}" y1="${p.y}" x2="${RT_CX}" y2="${RT_CY - 4}"/>`;
     }).join("");
 
-    const seats = SEAT_POS.map((p, i) => {
-      const v = votes[i];
+    // seats — map seat name → vote
+    const voteBySeat = {};
+    votes.forEach(v => { if (v.seat) voteBySeat[v.seat] = v; });
+    const seats = positions.map((p, i) => {
+      const seatName = activeSeats[i];
+      const seatTitle = (STATE.council_seats.find(s => s.seat === seatName) || {}).title || seatName;
+      const v = voteBySeat[seatName];
       const klass = v ? `vote-${v.label}` : "thinking";
       const id    = v ? (v.model || "—") : "deliberating…";
       const tag   = v ? (v.vendor || v.family || "") : "";
       const vote  = v ? (v.label || "?")[0] : "·";
       const ms    = (v && v.ms) ? `${v.ms} ms` : "";
-      const lblX = p.x; const lblY = p.y;
       const labelAbove = p.y < RT_CY;
-      const idY  = labelAbove ? lblY - 32 : lblY + 38;
-      const tagY = labelAbove ? lblY - 22 : lblY + 48;
-      const msY  = labelAbove ? lblY - 12 : lblY + 58;
+      const roleY = labelAbove ? p.y - 42 : p.y + 32;
+      const idY   = labelAbove ? p.y - 30 : p.y + 44;
+      const tagY  = labelAbove ? p.y - 20 : p.y + 54;
+      const msY   = labelAbove ? p.y - 11 : p.y + 63;
       return `<g class="rt-seat ${klass}">
         <circle cx="${p.x}" cy="${p.y}" r="18"/>
         <text class="seat-vote" x="${p.x}" y="${p.y + 6}" text-anchor="middle"
               style="fill:${v ? HEALTH_COLOR[v.label] : "var(--info)"}">${vote}</text>
-        <text class="seat-id"  x="${lblX}" y="${idY}"  text-anchor="middle">${escapeHtml(id)}</text>
-        <text class="seat-tag" x="${lblX}" y="${tagY}" text-anchor="middle">${escapeHtml(tag)}</text>
-        <text class="seat-ms"  x="${lblX}" y="${msY}"  text-anchor="middle">${ms}</text>
+        <text class="seat-role" x="${p.x}" y="${roleY}" text-anchor="middle">${escapeHtml(seatTitle.toUpperCase())}</text>
+        <text class="seat-id"   x="${p.x}" y="${idY}"   text-anchor="middle">${escapeHtml(id)}</text>
+        <text class="seat-tag"  x="${p.x}" y="${tagY}"  text-anchor="middle">${escapeHtml(tag)}</text>
+        <text class="seat-ms"   x="${p.x}" y="${msY}"   text-anchor="middle">${ms}</text>
       </g>`;
     }).join("");
 
-    // arbiter chip (top), drawn only when escalation happened
-    let arbiterChip = "";
-    if (arbiter) {
-      arbiterChip = `
-        <g class="rt-arbiter">
-          <line class="rt-arbiter-line" x1="${RT_CX}" y1="${ARBITER_POS.y + 22}" x2="${RT_CX}" y2="${RT_CY - 38}"/>
-          <rect x="${ARBITER_POS.x - 90}" y="${ARBITER_POS.y - 18}" width="180" height="40" rx="3"/>
-          <text class="ab-label" x="${ARBITER_POS.x}" y="${ARBITER_POS.y - 4}"  text-anchor="middle">T2 ARBITER</text>
-          <text class="ab-vote"  x="${ARBITER_POS.x - 50}" y="${ARBITER_POS.y + 14}" text-anchor="middle"
-                style="fill:${HEALTH_COLOR[arbiter.label]}">${arbiter.label || "?"}</text>
-          <text class="ab-id"    x="${ARBITER_POS.x + 30}" y="${ARBITER_POS.y + 14}" text-anchor="middle">${escapeHtml(arbiter.model || "nemotron")} · ${arbiter.ms || "?"}ms</text>
+    // Mission Director (always shown if assessment ran)
+    let directorChip = "";
+    if (director) {
+      const dis = director.disagreement ? "ESCALATED" : "CONFIRMED";
+      directorChip = `
+        <g class="rt-director">
+          <line class="rt-director-line" x1="${RT_CX}" y1="${DIR_POS.y + 22}" x2="${RT_CX}" y2="${RT_CY - 38}"/>
+          <rect x="${DIR_POS.x - 100}" y="${DIR_POS.y - 18}" width="200" height="44" rx="3"/>
+          <text class="ab-label" x="${DIR_POS.x}" y="${DIR_POS.y - 4}"  text-anchor="middle">MISSION DIRECTOR · ${dis}</text>
+          <text class="ab-vote"  x="${DIR_POS.x - 60}" y="${DIR_POS.y + 16}" text-anchor="middle"
+                style="fill:${HEALTH_COLOR[director.label]}">${ATTENTION_OF[director.label] || director.label}</text>
+          <text class="ab-id"    x="${DIR_POS.x + 40}" y="${DIR_POS.y + 16}" text-anchor="middle">${escapeHtml(director.model || "nemotron")} · ${director.ms || "?"}ms</text>
         </g>`;
     }
 
-    els.rtSvg.innerHTML = arbiterChip + edges + seats + center;
+    els.rtSvg.innerHTML = directorChip + edges + seats + center;
 
-    // status text + tally
     const labels = votes.map(v => v.label).filter(Boolean);
-    const ms = labels.length ? `${labels.length}/5 advisors voted` :
-                "advisors deliberating…";
-    els.rtStatus.textContent = arbiter ?
-      `${ms} · ARBITER escalated → ${arbiter.label}` : ms;
+    els.rtStatus.textContent = director ?
+      `${labels.length}/${n} specialists · DIRECTOR ${director.disagreement ? "escalated" : "confirmed"} → ${ATTENTION_OF[director.label]}` :
+      labels.length ? `${labels.length}/${n} specialists voted` : "council deliberating…";
 
-    renderTally(votes, arbiter);
+    renderTally(votes, director);
   }
 
-  function renderTally(votes, arbiter) {
+  function renderTally(votes, director) {
     const counts = { GREEN: 0, YELLOW: 0, RED: 0, BLACK: 0 };
     votes.forEach(v => { if (v.label) counts[v.label] = (counts[v.label] || 0) + 1; });
     const total = Math.max(1, Object.values(counts).reduce((a, b) => a + b, 0));
     const bar = ["GREEN", "YELLOW", "RED", "BLACK"]
       .map(k => `<i class="b-${k}" style="width:${100 * counts[k] / total}%"></i>`).join("");
     const cells = ["GREEN", "YELLOW", "RED", "BLACK"]
-      .map(k => `<span style="color:${HEALTH_COLOR[k]}">${k.slice(0,1)}<b>${counts[k]}</b></span>`).join("");
+      .map(k => `<span style="color:${HEALTH_COLOR[k]}">${ATTENTION_OF[k].slice(0,3)}<b>${counts[k]}</b></span>`).join("");
     els.rtTally.innerHTML = `
       <div class="rt-bar">${bar}</div>
-      <div class="rt-counts">${cells}${arbiter ? `<span style="color:var(--warn);margin-left:8px">ARB ${arbiter.label}</span>` : ""}</div>`;
+      <div class="rt-counts">${cells}${director ? `<span style="color:var(--warn);margin-left:8px">DIR ${ATTENTION_OF[director.label]}</span>` : ""}</div>`;
   }
 
-  // ------------------------------------------------------------------ mission brief
-  function renderBrief(brief) {
-    if (!brief) { els.brief.innerHTML = "<i style='color:var(--ink-faint)'>awaiting first round-table…</i>"; return; }
-    STATE.brief = brief;
-    els.briefTs.textContent = brief.provenance?.ts?.replace("T", " ").replace("Z", "Z") || "—";
-    const labelCls = `h-${brief.health}`;
-    const actionCls = ({ NOMINAL: "green", MONITOR: "", "SAFE-MODE": "red", RETIRE: "black" })[brief.action] || "";
-    const voteRows = brief.votes.map(v => `
-      <div class="brief-vote-row">
-        <div>${escapeHtml(v.model || "?")} <span class="bv-vendor">${escapeHtml(v.vendor || "")}</span></div>
-        <div class="bv-label ${v.label}">${v.label}</div>
-        <div class="bv-ms">${v.ms || "—"}ms</div>
-      </div>`).join("");
-    const factors = brief.drivers || {};
-    const factorRow = (label, value, hint) => {
-      const pct = Math.min(120, value * 100);
-      return `<div class="bf-row">
-        <span>${label}</span>
-        <div class="bf-bar"><i style="width:${pct}%"></i></div>
-        <b>${value.toFixed(2)}</b>
-        <div style="grid-column:2/-1;color:var(--ink-faint);font-size:9.5px">${hint}</div>
-      </div>`;
-    };
-    const arbiter = brief.arbiter;
+  // ------------------------------------------------------------------ mission inbox
+  function renderInbox() {
+    const inbox = STATE.inbox.slice().reverse();    // newest first
+    const newCount = inbox.filter(i => i.state === "NEW").length;
+    els.inboxNew.textContent   = newCount;
+    els.inboxTotal.textContent = inbox.length;
+    els.inboxList.innerHTML = inbox.map(it => `
+      <li data-id="${it.inbox_id}" class="attn-${it.attention_level} state-${it.state}">
+        <div class="ib-row1">
+          <span class="ib-name">${escapeHtml(it.subject)}</span>
+          <span class="ib-attn ${it.attention_level}">${it.attention_level}</span>
+        </div>
+        <div class="ib-state ${it.state}">${it.state}</div>
+        <div class="ib-meta">${escapeHtml(it.regime)}${it.shell ? " · "+escapeHtml(it.shell) : ""} · ${escapeHtml(it.ts.replace("T"," ").replace("Z",""))}</div>
+        <div class="ib-meta">${it.action}</div>
+      </li>`).join("");
+    els.inboxList.querySelectorAll("li").forEach(li => {
+      li.addEventListener("click", () => openInboxItem(parseInt(li.dataset.id, 10)));
+    });
+  }
+  function openInboxItem(inboxId) {
+    const item = STATE.inbox.find(i => i.inbox_id === inboxId);
+    if (!item) return;
+    STATE.selectedInbox = item;
+    // Pull the focused sat to make the round-table reflect this item.
+    focusSat(item.sat_id);
+    renderBrief(item);
+    els.briefPanel.hidden = false;
+  }
+  els.briefClose.addEventListener("click", () => { els.briefPanel.hidden = true; STATE.selectedInbox = null; });
+  els.btnAccept.addEventListener("click",  () => actOnInbox("accept"));
+  els.btnDismiss.addEventListener("click", () => actOnInbox("dismiss"));
+  async function actOnInbox(op) {
+    if (!STATE.selectedInbox) return;
+    await fetch(`/api/inbox/${STATE.selectedInbox.inbox_id}/${op}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+  }
 
+  function renderBrief(item) {
+    if (!item) { els.brief.innerHTML = ""; return; }
+    const labelCls = `h-${item.health}`;
+    const actionCls = ({ "ROUTINE REVIEW": "", "HIGH-PRIORITY REVIEW": "red", "REVIEW FOR EOL": "black", "STABLE — no action": "green" })[item.action] || "";
+    const director = item.director;
+    const counts = item.vote_counts || {};
     els.brief.innerHTML = `
       <div class="brief-section subject">
         <div class="brief-label">SUBJECT</div>
-        <div class="brief-body">
-          <b>${escapeHtml(brief.subject)}</b> — ${brief.regime}${brief.shell ? " / " + escapeHtml(brief.shell) : ""}
-          · op ${escapeHtml(brief.operator)}
+        <div class="brief-body"><b>${escapeHtml(item.subject)}</b> — ${item.regime}${item.shell ? " / " + escapeHtml(item.shell) : ""}</div>
+      </div>
+      <div class="brief-section">
+        <div class="brief-label">ATTENTION LEVEL</div>
+        <div class="brief-body"><b class="${labelCls}">${item.attention_level}</b></div>
+      </div>
+      <div class="brief-section">
+        <div class="brief-label">SPECIALIST VOTES</div>
+        <div class="brief-body" style="color:var(--ink-faint);font-size:10px">
+          ${["GREEN","YELLOW","RED","BLACK"].map(k => `<span style="color:${HEALTH_COLOR[k]};margin-right:6px">${ATTENTION_OF[k].slice(0,3)} ${counts[k] || 0}</span>`).join("")}
         </div>
       </div>
-      <div class="brief-section">
-        <div class="brief-label">SYNOPSIS</div>
-        <div class="brief-body">${escapeHtml(brief.synopsis || "")}</div>
-        <div class="brief-body">HEALTH <b class="${labelCls}">${brief.health}</b>${brief.transition ? ` <span style="color:var(--ink-faint)">(${escapeHtml(brief.transition)})</span>` : ""}</div>
-      </div>
-      <div class="brief-section">
-        <div class="brief-label">ADVISOR VOTES (${brief.votes.length})</div>
-        <div>${voteRows}</div>
-      </div>
-      ${arbiter ? `
-      <div class="brief-section arbiter">
-        <div class="brief-label">T2 ARBITER · ESCALATED</div>
-        <div class="brief-body"><b>${escapeHtml(arbiter.model || "")}</b> → <b style="color:${HEALTH_COLOR[arbiter.label]}">${arbiter.label}</b> in ${arbiter.ms || "?"} ms</div>
-        ${arbiter.rationale ? `<div class="brief-body" style="color:var(--ink-dim);font-style:italic;font-size:10.5px">${escapeHtml(arbiter.rationale.slice(0, 300))}</div>` : ""}
+      ${director ? `
+      <div class="brief-section director">
+        <div class="brief-label">MISSION DIRECTOR — ${director.disagreement ? "ESCALATED" : "CONFIRMED"}</div>
+        <div class="brief-body"><b>${escapeHtml(director.model || "")}</b> → <b style="color:${HEALTH_COLOR[director.label]}">${ATTENTION_OF[director.label]}</b> in ${director.ms || "?"} ms</div>
+        ${director.rationale ? `<div class="brief-body" style="color:var(--ink-dim);font-style:italic;font-size:10px">${escapeHtml(director.rationale.slice(0, 280))}</div>` : ""}
       </div>` : ""}
-      <div class="brief-section">
-        <div class="brief-label">DRIVERS</div>
-        <div class="brief-factors">
-          ${factorRow("AGE",     factors.age || 0,     "vs design life")}
-          ${factorRow("TID",     factors.tid || 0,     "accumulated dose")}
-          ${factorRow("SEE 30d", factors.see || 0,     "single-event upsets")}
-          ${factorRow("WEATHER", factors.weather || 0, `Kp ${brief.weather?.kp || "?"} · X-ray ${brief.weather?.xray_class || "?"}`)}
-        </div>
-      </div>
       <div class="brief-section action ${actionCls}">
-        <div class="brief-label">RECOMMENDED ACTION</div>
-        <div class="brief-body"><b>${brief.action}</b></div>
+        <div class="brief-label">RECOMMENDED REVIEW</div>
+        <div class="brief-body"><b>${escapeHtml(item.action)}</b></div>
       </div>
       <div class="brief-section">
         <div class="brief-label">PROVENANCE</div>
         <div class="brief-kv">
-          <div class="k">event_id</div>     <div class="v">${escapeHtml(brief.provenance?.event_id || "")}</div>
-          <div class="k">evidence_hash</div><div class="v">${escapeHtml((brief.provenance?.evidence_hash || "").slice(0, 16))}…</div>
-          <div class="k">parser</div>       <div class="v">${escapeHtml(brief.provenance?.parser_version || "")}</div>
-          <div class="k">review</div>       <div class="v">${escapeHtml(brief.review_status || "")}</div>
+          <div class="k">event_id</div>     <div class="v">${escapeHtml(item.provenance?.event_id || "")}</div>
+          <div class="k">evidence_hash</div><div class="v">${escapeHtml((item.provenance?.evidence_hash || "").slice(0, 16))}…</div>
+          <div class="k">ts</div>           <div class="v">${escapeHtml(item.provenance?.ts || "")}</div>
         </div>
       </div>`;
   }
-  els.btnApprove.addEventListener("click", () =>
-    fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }));
-  els.btnReview.addEventListener("click", () => {
-    if (STATE.brief) console.log("brief:", STATE.brief);  // operator can grab it from devtools for now
-  });
 
-  // ------------------------------------------------------------------ earth (compact)
+  // ------------------------------------------------------------------ earth
   const CENTER = { x: 400, y: 260 }, R = 170;
   function buildStars() {
     const out = [];
@@ -372,6 +447,23 @@
   const REGIME_RX  = { LEO: 195, SSO: 215, MEO: 290, GEO: 370 };
   const REGIME_RY  = { LEO: 60,  SSO: 95,  MEO: 135, GEO: 195 };
   const REGIME_SPD = { LEO: 0.14, SSO: 0.10, MEO: 0.04, GEO: 0.014 };
+
+  // Background visual catalog (5k unassessed objects, static dots)
+  function buildCatalog(catalog) {
+    const parts = [];
+    catalog.forEach((s, i) => {
+      const phase = ((parseInt(s.id, 10) || i) % 360) / 360;
+      const a = phase * Math.PI * 2;
+      const x = (CENTER.x + Math.cos(a) * (REGIME_RX[s.regime] || 200)).toFixed(1);
+      const y = (CENTER.y + Math.sin(a) * (REGIME_RY[s.regime] || 60) * 0.55).toFixed(1);
+      parts.push(`<circle class="sat-bg" cx="${x}" cy="${y}" r="0.8"/>`);
+    });
+    els.catalogLayer.innerHTML = parts.join("");
+    if (els.earthCount) els.earthCount.textContent = catalog.length.toLocaleString();
+    if (els.catalogSize) els.catalogSize.textContent = catalog.length.toLocaleString();
+  }
+
+  // Active triage sats (animated, health-coloured)
   const satEls = {};
   function buildSats(satList) {
     els.satLayer.innerHTML = "";
@@ -403,10 +495,8 @@
   function animateGlobe() {
     const t = performance.now() / 1000;
     for (const id in satEls) {
-      const o = satEls[id];
-      const p = satPos(o, t);
-      o.dot.setAttribute("cx", p.x);
-      o.dot.setAttribute("cy", p.y);
+      const o = satEls[id]; const p = satPos(o, t);
+      o.dot.setAttribute("cx", p.x); o.dot.setAttribute("cy", p.y);
       const back = Math.sin((o.phase + t * REGIME_SPD[o.def.regime]) * Math.PI * 2) > 0;
       o.dot.setAttribute("fill-opacity", back ? "0.55" : "1");
     }
@@ -425,9 +515,12 @@
   requestAnimationFrame(animateGlobe);
   buildStars(); buildGraticule(); buildContinents();
 
-  // ------------------------------------------------------------------ telemetry + lifecycle
-  const LC_ORDER = ["Pre-Launch", "In-Orbit Operations", "Event Management",
-                    "Deorbiting / Disposal", "Decommissioned"];
+  // pull catalog once
+  fetch("/api/catalog").then(r => r.json()).then(d => {
+    if (d.catalog) buildCatalog(d.catalog);
+  }).catch(() => {});
+
+  // ------------------------------------------------------------------ telemetry
   function renderTelemetry(f) {
     if (!f || !f.telemetry) return;
     els.telSat.textContent = `${f.name} LIVE`;
@@ -438,11 +531,6 @@
     els.telAltVal.textContent = last(f.telemetry.alt);
     els.telVelVal.textContent = last(f.telemetry.vel);
     els.telSigVal.textContent = last(f.telemetry.sig);
-    const idx = LC_ORDER.indexOf(f.lifecycle_stage);
-    [...els.lifecycle.children].forEach((c, i) => {
-      c.classList.toggle("active", i === idx);
-      c.classList.toggle("passed", i < idx);
-    });
   }
   function drawSpark(el, data) {
     if (!data || !data.length) return;
@@ -459,16 +547,18 @@
   function applySnapshot(s) {
     STATE.sats = s.sats || [];
     STATE.focused = s.focused;
+    STATE.inbox = s.inbox || [];
     if (s.fleet_health) renderFleetHealth(s.fleet_health);
     if (s.tokens) renderTokens(s.tokens);
     if (s.inference) renderInference(s.inference);
     buildSats(STATE.sats);
     renderFleet();
+    renderInbox();
     if (STATE.focused) {
       els.focusName.textContent = STATE.focused.name;
-      els.focusHealth.textContent = STATE.focused.health;
-      els.focusHealth.style.color = HEALTH_COLOR[STATE.focused.health];
-      renderRoundTable(STATE.focused, STATE.brief);
+      els.focusAttn.textContent = ATTENTION_OF[STATE.focused.health] || STATE.focused.health;
+      els.focusAttn.style.color = HEALTH_COLOR[STATE.focused.health];
+      renderRoundTable(STATE.focused, null);
       renderTelemetry(STATE.focused);
     }
   }
@@ -485,18 +575,26 @@
     renderFleet();
     if (STATE.focused) {
       els.focusName.textContent = STATE.focused.name;
-      els.focusHealth.textContent = STATE.focused.health;
-      els.focusHealth.style.color = HEALTH_COLOR[STATE.focused.health];
+      els.focusAttn.textContent = ATTENTION_OF[STATE.focused.health] || STATE.focused.health;
+      els.focusAttn.style.color = HEALTH_COLOR[STATE.focused.health];
       renderTelemetry(STATE.focused);
-      // Only update the round-table when the brief is for the *currently focused* sat
       const b = m.brief;
       if (b && b.subject_id === STATE.focused.id) {
-        STATE.brief = b;
         renderRoundTable(STATE.focused, b);
-        renderBrief(b);
       } else {
-        renderRoundTable(STATE.focused, STATE.brief);
+        renderRoundTable(STATE.focused, null);
       }
+    }
+  }
+  function applyInbox(m) {
+    if (!m.item) return;
+    const idx = STATE.inbox.findIndex(i => i.inbox_id === m.item.inbox_id);
+    if (idx === -1) STATE.inbox.push(m.item);
+    else STATE.inbox[idx] = m.item;
+    renderInbox();
+    if (STATE.selectedInbox && STATE.selectedInbox.inbox_id === m.item.inbox_id) {
+      STATE.selectedInbox = m.item;
+      renderBrief(m.item);
     }
   }
 
@@ -507,11 +605,12 @@
       switch (m.type) {
         case "snapshot":     applySnapshot(m); break;
         case "fleet_update": applyFleetUpdate(m); break;
-        case "focus_change": STATE.focused = m.focused; STATE.brief = null;
-                             els.rtStatus.textContent = "advisors deliberating…";
+        case "focus_change": STATE.focused = m.focused;
+                             els.rtStatus.textContent = "council deliberating…";
                              applyFleetUpdate({ focused: m.focused }); break;
         case "tokens":       renderTokens(m.tokens); break;
         case "inference":    renderInference(m.inference); break;
+        case "inbox":        applyInbox(m); break;
       }
     };
     es.onerror = () => { es.close(); setTimeout(connect, 1500); };
