@@ -151,6 +151,52 @@ SATS = [
 
 
 # ============================================================================
+# Active triage seeding — expand the hand-curated 47 sats up to ~1000 by
+# synthesising additional Starlinks across the published shells. These ARE
+# in the council's triage queue (they get assessed by the round-robin
+# sweep), but they start with health = UNKNOWN (grey) until first assessed,
+# per docs/RISKS_AND_FIXES.md "Render objects not yet updated as black /
+# inactive / unknown".
+# ============================================================================
+
+def _seed_extra_starlinks(target: int = 1000) -> None:
+    if len(SATS) >= target:
+        return
+    rng = random.Random(2026)
+    shells = [
+        ("v1.0/G1",   53.0, (540, 560),  300, "comms",  300),
+        ("v1.5/G4",   53.2, (540, 570),  300, "comms",  300),
+        ("v2.0-mini", 43.0, (520, 550),  800, "comms",  180),
+        ("DTC",       53.0, (535, 545),  800, "d2c",    100),
+        ("v1.5/G3",   97.6, (560, 580),  300, "comms",  100),
+    ]
+    norad = 60000
+    for shell, incl, alt_range, mass, mission, count in shells:
+        for _ in range(count):
+            if len(SATS) >= target: break
+            launched_year = rng.randint(2020, 2025)
+            launched_mon  = rng.randint(1, 12)
+            launched_day  = rng.randint(1, 28)
+            sat = _starlink(
+                str(norad), f"STRLNK-{norad}", shell,
+                incl + rng.uniform(-1.2, 1.2),
+                round(rng.uniform(*alt_range), 1),
+                f"{launched_year}-{launched_mon:02d}-{launched_day:02d}",
+                design_life=5, mass=mass, mission=mission,
+            )
+            # New seeded sats start UNASSESSED — they show grey in the UI
+            # until the assessment loop reaches them.
+            sat["health"] = "UNKNOWN"
+            sat["score"]  = 0.0
+            sat["last_assessed"] = None
+            SATS.append(sat)
+            norad += 1
+
+
+_seed_extra_starlinks(target=1000)
+
+
+# ============================================================================
 # Visual catalog — large background set for "global coverage" feel, per
 # docs/RISKS_AND_FIXES.md P1 "Fleet size should feel global without forcing
 # realtime updates". These objects are NOT in the council's triage queue;
@@ -805,7 +851,7 @@ def director_call(sat: dict, wx: dict, votes: list[dict]) -> dict | None:
     }
 
 
-def assess_sat(sat: dict, wx: dict) -> dict:
+def assess_sat(sat: dict, wx: dict, with_director: bool = True) -> dict:
     """Run every assessor, take the median label, return assessment dossier."""
     votes = []
     scores = []
@@ -844,12 +890,13 @@ def assess_sat(sat: dict, wx: dict) -> dict:
     transition = None
     age, tid, see, wxf = base_factors(sat, wx)
 
-    # MISSION DIRECTOR: Nemotron always sits at the head of the table and
-    # writes the final call. Specialists are inputs; the Director's label is
-    # what the operator sees in the brief.
+    # MISSION DIRECTOR: Nemotron sits at the head of the table and writes
+    # the final call. Reserved for the focused sat (`with_director=True`);
+    # background sweep across the rest of the 1000-sat fleet skips the
+    # Director call to keep per-sat latency under a few seconds.
     arbiter = None
     live_votes = [v for v in votes if v.get("live")]
-    if len(live_votes) >= 1:
+    if with_director and len(live_votes) >= 1:
         arbiter = director_call(sat, wx, live_votes)
         if arbiter and arbiter["label"]:
             median_label = arbiter["label"]
@@ -996,7 +1043,7 @@ def update_telemetry(sat: dict) -> None:
     r_km = 6378 + base_alt
     vel = math.sqrt(398600 / r_km)
     # signal strength noise + health-driven floor
-    sig_base = -55 - {"GREEN": 0, "YELLOW": 8, "RED": 18, "BLACK": 32}[sat["health"]]
+    sig_base = -55 - {"GREEN": 0, "YELLOW": 8, "RED": 18, "BLACK": 32}.get(sat["health"], 4)
     sig = sig_base + random.gauss(0, 1.5)
     t["alt"].append(round(alt, 2))
     t["vel"].append(round(vel, 3))
@@ -1167,7 +1214,7 @@ def public_sat(sat: dict) -> dict:
 
 
 def fleet_health_counts() -> dict:
-    counts = {"GREEN": 0, "YELLOW": 0, "RED": 0, "BLACK": 0}
+    counts = {"GREEN": 0, "YELLOW": 0, "RED": 0, "BLACK": 0, "UNKNOWN": 0}
     for s in SATS:
         counts[s["health"]] = counts.get(s["health"], 0) + 1
     return counts
@@ -1288,20 +1335,29 @@ def assessment_loop() -> None:
             now_ts = time.time()
             focus = focused_sat()
 
-            # Priority 1: focused sat round-table — every ~10s.
+            # Priority 1: focused sat — full round-table with Director.
+            with_director = False
             if now_ts - last_focus_assess >= 10.0:
                 sat = focus
                 last_focus_assess = now_ts
-            # Priority 2: background fleet sweep — one non-focus sat every 8s.
-            elif now_ts - last_fleet_sweep >= 8.0:
+                with_director = True
+            # Priority 2: background fleet sweep — specialists only (no
+            # Director call), so 1000 sats can be cycled at a reasonable
+            # pace. UNKNOWN sats jump the queue so first-pass coverage
+            # converges faster.
+            elif now_ts - last_fleet_sweep >= 4.0:
                 others = [s for s in SATS if s["id"] != focus["id"]]
-                sat = others[sweep_idx % len(others)]
+                unknowns = [s for s in others if s["health"] == "UNKNOWN"]
+                if unknowns:
+                    sat = unknowns[sweep_idx % len(unknowns)]
+                else:
+                    sat = others[sweep_idx % len(others)]
                 sweep_idx += 1
                 last_fleet_sweep = now_ts
             else:
                 time.sleep(1.5)
                 continue
-            assessment = assess_sat(sat, wx)
+            assessment = assess_sat(sat, wx, with_director=with_director)
 
             # surface transitions to alerts + Mission Inbox (no chat popups)
             if assessment["transition"]:

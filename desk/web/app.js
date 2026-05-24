@@ -19,7 +19,7 @@
     inferBadge: $("infer-badge"), inferMode: $("infer-mode"), inferSub: $("infer-sub"),
     gpuName: $("gpu-name"), gpuUtil: $("gpu-util"), gpuMem: $("gpu-mem"),
     tokenBar: $("token-bar"), tokenSpent: $("token-spent"), tokenQuota: $("token-quota"),
-    fhGreen: $("fh-green"), fhYellow: $("fh-yellow"), fhRed: $("fh-red"), fhBlack: $("fh-black"),
+    fhGreen: $("fh-green"), fhYellow: $("fh-yellow"), fhRed: $("fh-red"), fhBlack: $("fh-black"), fhUnknown: $("fh-unknown"),
     focusName: $("focus-name"), focusAttn: $("focus-attn"),
     layoutToggle: $("layout-toggle"),
 
@@ -104,10 +104,11 @@
     els.tokenQuota.textContent = (t.quota || 0).toLocaleString();
   }
   function renderFleetHealth(f) {
-    els.fhGreen.textContent  = f.GREEN  || 0;
-    els.fhYellow.textContent = f.YELLOW || 0;
-    els.fhRed.textContent    = f.RED    || 0;
-    els.fhBlack.textContent  = f.BLACK  || 0;
+    els.fhGreen.textContent  = f.GREEN   || 0;
+    els.fhYellow.textContent = f.YELLOW  || 0;
+    els.fhRed.textContent    = f.RED     || 0;
+    els.fhBlack.textContent  = f.BLACK   || 0;
+    if (els.fhUnknown) els.fhUnknown.textContent = f.UNKNOWN || 0;
   }
   function renderInference(inf) {
     if (!inf) return;
@@ -201,12 +202,16 @@
     if (f === "WARN")     return s.health !== "GREEN";
     return s.regime === f;
   }
+  const FLEET_RENDER_CAP = 250;   // keep DOM light at 1000-sat scale
   function renderFleet() {
     const list = STATE.sats.filter(matchesFilter);
     const order = { BLACK: 0, RED: 1, YELLOW: 2, GREEN: 3, UNKNOWN: 4 };
     list.sort((a, b) => (order[a.health] - order[b.health]) || a.name.localeCompare(b.name));
-    els.fleetCount.textContent = `${list.length} / ${STATE.sats.length}`;
-    els.fleetList.innerHTML = list.map(s => `
+    const shown = list.slice(0, FLEET_RENDER_CAP);
+    const truncated = list.length > shown.length;
+    els.fleetCount.textContent =
+      `${shown.length}${truncated ? " of " + list.length : ""} / ${STATE.sats.length}`;
+    els.fleetList.innerHTML = shown.map(s => `
       <li data-id="${s.id}" class="${STATE.focused && STATE.focused.id === s.id ? "focused" : ""}">
         <span class="fl-dot h-${s.health}"></span>
         <div>
@@ -214,8 +219,9 @@
           <div class="fl-meta">${s.regime} · ${escapeHtml(s.shell || s.operator)}</div>
         </div>
         <div class="fl-tag">${ATTENTION_OF[s.health] || s.health}</div>
-      </li>`).join("");
-    els.fleetList.querySelectorAll("li").forEach(li =>
+      </li>`).join("") +
+      (truncated ? `<li class="fl-more">… ${list.length - shown.length} more, narrow with a filter</li>` : "");
+    els.fleetList.querySelectorAll("li[data-id]").forEach(li =>
       li.addEventListener("click", () => focusSat(li.dataset.id))
     );
   }
