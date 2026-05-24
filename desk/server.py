@@ -282,11 +282,11 @@ def probe_ollama() -> dict:
     body = {
         "model": chosen,
         "messages": [
-            {"role": "system", "content": "Reply with one word only."},
-            {"role": "user",   "content": "Is the GPU warm? Reply with one word: yes or no."},
+            {"role": "system", "content": "You are a satellite health classifier. Reply with one word only from {GREEN, YELLOW, RED, BLACK}."},
+            {"role": "user",   "content": "Smoke test — output GREEN."},
         ],
         "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 8},
+        "options": {"temperature": 0.0, "num_predict": 64},
     }
     resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body)
     INFERENCE["last_call_ms"] = round(ms, 1)
@@ -327,22 +327,29 @@ def live_assessor_call(sat: dict, wx: dict, prompt_only: bool = False) -> dict |
     body = {
         "model": INFERENCE["live_model"],
         "messages": [
-            {"role": "system", "content": "You are a spacecraft operations health classifier."},
+            {"role": "system", "content": "You are a spacecraft operations health classifier. Reply with one word only from {GREEN, YELLOW, RED, BLACK}."},
             {"role": "user",   "content": prompt},
         ],
         "stream": False,
-        "options": {"temperature": 0.0, "num_predict": 12},
+        "options": {"temperature": 0.0, "num_predict": 256},
     }
-    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=8.0)
+    resp, ms = _http_post(INFERENCE["ollama_url"].rstrip("/") + "/api/chat", body, timeout=15.0)
     INFERENCE["last_call_ms"] = round(ms, 1)
     if resp is None:
         INFERENCE["live_failures"] += 1
         return None
     INFERENCE["live_calls"] += 1
-    raw = (resp.get("message") or {}).get("content", "").strip().upper()
-    INFERENCE["last_response"] = raw[:80]
-    label = next((k for k in ("BLACK", "RED", "YELLOW", "GREEN") if k in raw), None)
-    return {"label": label, "raw": raw, "ms": INFERENCE["last_call_ms"]}
+    msg = resp.get("message") or {}
+    content = (msg.get("content") or "").strip()
+    thinking = (msg.get("thinking") or "").strip()
+    # Nemotron-3-nano is a thinking model — answer lands in `content`, the
+    # reasoning trail lands in `thinking`. Fall back to `thinking` if Ollama
+    # routed the answer there for any reason.
+    haystack = (content + " " + thinking).upper()
+    label = next((k for k in ("BLACK", "RED", "YELLOW", "GREEN") if k in haystack), None)
+    INFERENCE["last_response"] = (content or thinking)[:160]
+    INFERENCE["last_thinking"] = thinking[:240] if thinking else None
+    return {"label": label, "raw": content, "thinking": thinking, "ms": INFERENCE["last_call_ms"]}
 
 
 def host_gpu_snapshot() -> dict | None:
@@ -377,6 +384,7 @@ def inference_view() -> dict:
         "live_failures": INFERENCE["live_failures"],
         "last_call_ms": INFERENCE["last_call_ms"],
         "last_response": INFERENCE["last_response"],
+        "last_thinking": INFERENCE.get("last_thinking"),
         "host_gpu": INFERENCE["host_gpu"],
     }
 
