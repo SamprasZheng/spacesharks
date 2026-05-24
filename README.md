@@ -41,10 +41,15 @@ Spacesharks is the attempt to close that gap.
 ## Docs
 
 - [**Pitch — Spacesharks Mission Desk**](docs/PITCH.md) — canonical submission narrative (5-word scope, problem, solution, architecture diagram, Day 1 code shape)
+- [Thesis](docs/THESIS.md) — why this scope, why not "use the largest model", and the honest prior-art landscape
 - [Scope and non-goals](docs/SCOPE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Trust model](docs/TRUST.md)
+- [Operational invariants](docs/INVARIANTS.md) — fail-closed rules, source lock, publish gate, and the six things judges actually see
 - [Hackathon plan](docs/PLAN.md)
+- [Event schema](docs/EVENT_SCHEMA.md) — the row contract every ingestor, model, and scoreboard component conforms to; provenance-first; per-phase extras
+- [Evaluation rubric](docs/EVALUATION.md) — two-track scoring (prediction + recommendation); calibration tiers; honest-scoring guardrails; the ten-metric public scoreboard
+- [Governance](docs/GOVERNANCE.md) — tiered publish policy with cancel window; `review_status` lifecycle; denied-action audit; structured debate format
 - [Roadmap (post-MVP)](docs/ROADMAP.md) — phased expansion grounded on existing RF, thermal-mechanical, and signal-processing work. Read only after the MVP is shipped; nothing here belongs in the hackathon scope.
 - [Local research catalog](docs/research/INDEX.md) — index of local `D:\` material that feeds the roadmap.
 - [Research notes](docs/research/index.md)
