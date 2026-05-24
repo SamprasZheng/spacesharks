@@ -14,6 +14,9 @@ Each note is self-contained and copy-paste-into-code ready.
 ## Patterns
 
 - [Small-Model Ensemble Arbiter](small-model-ensemble-arbiter.md) — three-role decomposition (classifier / risk scorer / action drafter), deterministic arbiter logic, confidence calibration (Brier, temperature scaling), abstain-on-disagreement, OpenRouter cost model, 40-line Python skeleton (ingested 2026-05-24)
+- [Tiered Inference](tiered-inference.md) — cost-aware T1/T2/T3 model cascade with four explicit escalation triggers (low agreement / high-risk event / high-impact asset / threshold proximity); FrugalGPT / RouteLLM / Together MoA evidence; Nemotron Nano/Super/Ultra pricing table (May 2026); runnable Python `dispatch()` with `TIER_REGISTRY` config (ingested 2026-05-24)
+- [Calibrated Confidence](calibrated-confidence.md) — three-class `answer / abstain / escalate` output schema; five calibration techniques (temperature scaling, Platt, verbalised, P(IK), conformal prediction); coverage–risk operating point per decision class; runnable Brier + reliability diagram + temperature-scaling Python; Day-1 bootstrap from NASA CARA + SWPC ground truth (ingested 2026-05-24)
+- [Agentic Provenance](agentic-provenance.md) — four-layer trust schema (data / model / decision / system) with required field tables; W3C PROV-DM / C2PA v2.1 / NIST AI 600-1 / EU AI Act Article 50 / CycloneDX ML-BOM analogues; trace ↔ span ↔ event mapping to commercial observability; runnable `EvidenceStore` + `EventLog` + nightly re-hash verifier; 5-tuple reproducibility invariant (ingested 2026-05-24)
 
 ## Deferred (schema-conformant stubs only — see SCOPE.md non-goals)
 
