@@ -28,7 +28,7 @@
     fleetCount: $("fleet-count"), fleetList: $("fleet-list"), fleetFilters: $("fleet-filters"),
     catalogSize: $("catalog-size"),
 
-    rtSvg: $("roundtable"), rtStatus: $("rt-status"), rtTally: $("rt-tally"),
+    councilBench: $("council-bench"), rtStatus: $("rt-status"), rtTally: $("rt-tally"),
 
     inboxList: $("inbox-list"), inboxNew: $("inbox-new"), inboxTotal: $("inbox-total"),
     briefPanel: $("brief-panel"), brief: $("brief"), briefClose: $("brief-close"),
@@ -227,85 +227,58 @@
     });
   }
 
-  // ------------------------------------------------------------------ round-table
-  const RT_CX = 240, RT_CY = 195, RT_RADIUS = 130;
-  const DIR_POS = { x: RT_CX, y: 38 };
-  function seatPositions(n) {
-    return Array.from({ length: n }, (_, i) => {
-      const a = -Math.PI / 2 + i * (2 * Math.PI / n);
-      return { x: RT_CX + Math.cos(a) * RT_RADIUS, y: RT_CY + Math.sin(a) * RT_RADIUS };
-    });
-  }
-
+  // ------------------------------------------------------------------ council bench
+  // HTML/flex layout — fits the slim strip cleanly: focused sat card on the
+  // left, specialist chips in a row, Director chip on the right.
   function renderRoundTable(focused, brief) {
-    if (!focused) { els.rtSvg.innerHTML = ""; return; }
+    if (!focused) { els.councilBench.innerHTML = ""; return; }
     const votes = (brief && brief.votes) ? brief.votes :
                   (focused.assessment ? focused.assessment.votes : []);
     const director = brief ? brief.director : (focused.assessment ? focused.assessment.arbiter : null);
     const activeSeats = (STATE.inference && STATE.inference.active_seats) || ["ORBIT","TRIAGE","EVIDENCE"];
     const n = activeSeats.length;
-    const positions = seatPositions(n);
-
-    // central sat-card
-    const attn = ATTENTION_OF[focused.health] || focused.health;
-    const center = `
-      <g class="rt-center">
-        <rect x="${RT_CX - 75}" y="${RT_CY - 36}" width="150" height="72" rx="4"/>
-        <text class="ct-name"   x="${RT_CX}" y="${RT_CY - 16}" text-anchor="middle">${escapeHtml(focused.name)}</text>
-        <text class="ct-meta"   x="${RT_CX}" y="${RT_CY - 2}"  text-anchor="middle">${focused.regime}${focused.shell ? " · " + escapeHtml(focused.shell) : ""}</text>
-        <text class="ct-health" x="${RT_CX}" y="${RT_CY + 22}" text-anchor="middle"
-              style="fill:${HEALTH_COLOR[focused.health] || "#fff"}">${attn}</text>
-      </g>`;
-
-    // edges
-    const edges = positions.map((p) => {
-      return `<line class="rt-edge active" x1="${p.x}" y1="${p.y}" x2="${RT_CX}" y2="${RT_CY - 4}"/>`;
-    }).join("");
-
-    // seats — map seat name → vote
     const voteBySeat = {};
     votes.forEach(v => { if (v.seat) voteBySeat[v.seat] = v; });
-    const seats = positions.map((p, i) => {
-      const seatName = activeSeats[i];
-      const seatTitle = (STATE.council_seats.find(s => s.seat === seatName) || {}).title || seatName;
+
+    const attn = ATTENTION_OF[focused.health] || focused.health;
+    const subjectCard = `
+      <div class="bench-subject">
+        <div class="bs-label">SUBJECT</div>
+        <div class="bs-name">${escapeHtml(focused.name)}</div>
+        <div class="bs-meta">${focused.regime}${focused.shell ? " · " + escapeHtml(focused.shell) : ""}</div>
+        <div class="bs-health" style="color:${HEALTH_COLOR[focused.health] || "#fff"}">${attn}</div>
+      </div>`;
+
+    const seats = activeSeats.map((seatName) => {
       const v = voteBySeat[seatName];
+      const seatTitle = (STATE.council_seats.find(s => s.seat === seatName) || {}).title || seatName;
+      const roleLabel = seatTitle.toUpperCase().replace(" ANALYST", "");
       const klass = v ? `vote-${v.label}` : "thinking";
-      const id    = v ? (v.model || "—") : "deliberating…";
-      const tag   = v ? (v.vendor || v.family || "") : "";
-      const vote  = v ? (v.label || "?")[0] : "·";
-      const ms    = (v && v.ms) ? `${v.ms} ms` : "";
-      const labelAbove = p.y < RT_CY;
-      const roleY = labelAbove ? p.y - 42 : p.y + 32;
-      const idY   = labelAbove ? p.y - 30 : p.y + 44;
-      const tagY  = labelAbove ? p.y - 20 : p.y + 54;
-      const msY   = labelAbove ? p.y - 11 : p.y + 63;
-      return `<g class="rt-seat ${klass}">
-        <circle cx="${p.x}" cy="${p.y}" r="18"/>
-        <text class="seat-vote" x="${p.x}" y="${p.y + 6}" text-anchor="middle"
-              style="fill:${v ? HEALTH_COLOR[v.label] : "var(--info)"}">${vote}</text>
-        <text class="seat-role" x="${p.x}" y="${roleY}" text-anchor="middle">${escapeHtml(seatTitle.toUpperCase())}</text>
-        <text class="seat-id"   x="${p.x}" y="${idY}"   text-anchor="middle">${escapeHtml(id)}</text>
-        <text class="seat-tag"  x="${p.x}" y="${tagY}"  text-anchor="middle">${escapeHtml(tag)}</text>
-        <text class="seat-ms"   x="${p.x}" y="${msY}"   text-anchor="middle">${ms}</text>
-      </g>`;
+      return `<div class="bench-seat ${klass}">
+        <div class="bs-role">${escapeHtml(roleLabel)}</div>
+        <div class="bs-vote" style="color:${v ? HEALTH_COLOR[v.label] : "var(--info)"}">${v ? (v.label || "?")[0] : "·"}</div>
+        <div class="bs-id">${escapeHtml(v ? (v.model || "—") : "deliberating")}</div>
+        <div class="bs-tag">${escapeHtml(v ? (v.vendor || "") : "")}${v && v.ms ? " · " + v.ms + "ms" : ""}</div>
+      </div>`;
     }).join("");
 
-    // Mission Director (always shown if assessment ran)
-    let directorChip = "";
+    let directorChip = `<div class="bench-director thinking">
+        <div class="bs-role">DIRECTOR</div>
+        <div class="bs-vote" style="color:var(--ink-faint)">·</div>
+        <div class="bs-id">nemotron</div>
+        <div class="bs-tag">awaiting</div>
+      </div>`;
     if (director) {
       const dis = director.disagreement ? "ESCALATED" : "CONFIRMED";
-      directorChip = `
-        <g class="rt-director">
-          <line class="rt-director-line" x1="${RT_CX}" y1="${DIR_POS.y + 22}" x2="${RT_CX}" y2="${RT_CY - 38}"/>
-          <rect x="${DIR_POS.x - 100}" y="${DIR_POS.y - 18}" width="200" height="44" rx="3"/>
-          <text class="ab-label" x="${DIR_POS.x}" y="${DIR_POS.y - 4}"  text-anchor="middle">MISSION DIRECTOR · ${dis}</text>
-          <text class="ab-vote"  x="${DIR_POS.x - 60}" y="${DIR_POS.y + 16}" text-anchor="middle"
-                style="fill:${HEALTH_COLOR[director.label]}">${ATTENTION_OF[director.label] || director.label}</text>
-          <text class="ab-id"    x="${DIR_POS.x + 40}" y="${DIR_POS.y + 16}" text-anchor="middle">${escapeHtml(director.model || "nemotron")} · ${director.ms || "?"}ms</text>
-        </g>`;
+      directorChip = `<div class="bench-director vote-${director.label}">
+        <div class="bs-role">DIRECTOR · ${dis}</div>
+        <div class="bs-vote" style="color:${HEALTH_COLOR[director.label]}">${ATTENTION_OF[director.label] || director.label}</div>
+        <div class="bs-id">${escapeHtml(director.model || "nemotron")}</div>
+        <div class="bs-tag">${director.ms || "?"} ms</div>
+      </div>`;
     }
 
-    els.rtSvg.innerHTML = directorChip + edges + seats + center;
+    els.councilBench.innerHTML = subjectCard + seats + directorChip;
 
     const labels = votes.map(v => v.label).filter(Boolean);
     els.rtStatus.textContent = director ?
@@ -448,15 +421,21 @@
   const REGIME_RY  = { LEO: 60,  SSO: 95,  MEO: 135, GEO: 195 };
   const REGIME_SPD = { LEO: 0.14, SSO: 0.10, MEO: 0.04, GEO: 0.014 };
 
-  // Background visual catalog (5k unassessed objects, static dots)
+  // Background visual catalog — 10k unassessed objects rendered as a thick
+  // populated band. Each sat carries its own phase + ring_jitter so the
+  // result looks like a 3D shell, not a thin line.
   function buildCatalog(catalog) {
     const parts = [];
-    catalog.forEach((s, i) => {
-      const phase = ((parseInt(s.id, 10) || i) % 360) / 360;
-      const a = phase * Math.PI * 2;
-      const x = (CENTER.x + Math.cos(a) * (REGIME_RX[s.regime] || 200)).toFixed(1);
-      const y = (CENTER.y + Math.sin(a) * (REGIME_RY[s.regime] || 60) * 0.55).toFixed(1);
-      parts.push(`<circle class="sat-bg" cx="${x}" cy="${y}" r="0.8"/>`);
+    catalog.forEach((s) => {
+      const a = (typeof s.phase === "number" ? s.phase : Math.random()) * Math.PI * 2;
+      const rx = (REGIME_RX[s.regime] || 200) * (1 + (s.ring_jitter || 0));
+      const ry = (REGIME_RY[s.regime] || 60)  * (1 + (s.ring_jitter || 0)) * 0.55;
+      const x = (CENTER.x + Math.cos(a) * rx).toFixed(1);
+      const y = (CENTER.y + Math.sin(a) * ry).toFixed(1);
+      // Slight depth dimming for the back half of the ring
+      const back = Math.sin(a) > 0;
+      const cls = back ? "sat-bg sat-bg-back" : "sat-bg";
+      parts.push(`<circle class="${cls}" cx="${x}" cy="${y}" r="1.4"/>`);
     });
     els.catalogLayer.innerHTML = parts.join("");
     if (els.earthCount) els.earthCount.textContent = catalog.length.toLocaleString();

@@ -123,7 +123,8 @@ body[data-layout="EARTH"] .layout-toggle { background: var(--info); color: #0210
     "fleet    roundtable inbox"
     "fleet    earth      inbox"
     "lineup   telemetry  inbox";
-  grid-template-rows: minmax(0, 1.1fr) minmax(0, 0.85fr) minmax(0, 0.55fr);
+  /* Round-table: slim strip. Earth: dominant. Telemetry: thin. */
+  grid-template-rows: minmax(0, 0.55fr) minmax(0, 1.45fr) minmax(0, 0.45fr);
 }
 .panel-fleet      { grid-area: fleet; }
 .panel-roundtable { grid-area: roundtable; }
@@ -202,36 +203,58 @@ body[data-layout="EARTH"] .panel-roundtable .rt-tally { display: flex; }
 }
 .fleet-foot b { color: var(--accent); }
 
-/* ================== ROUND TABLE ================== */
-.roundtable-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
-#roundtable { width: 100%; height: 100%; }
-.rt-edge { stroke: rgba(61,240,200,0.25); stroke-width: 1.2; fill: none; stroke-dasharray: 4 5; }
-.rt-edge.active { stroke: var(--accent); stroke-dasharray: none; opacity: 0.6; }
-.rt-director-line { stroke: var(--warn); stroke-width: 1.8; stroke-dasharray: 6 4; fill: none; }
-.rt-center rect { fill: rgba(8,30,48,0.95); stroke: var(--accent); stroke-width: 1.5; }
-.rt-center text { fill: var(--ink); font-family: var(--mono); }
-.rt-center .ct-name { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; }
-.rt-center .ct-meta { font-size: 9.5px; fill: var(--ink-faint); }
-.rt-center .ct-health { font-size: 14px; font-weight: 700; letter-spacing: 0.08em; }
-.rt-seat circle { fill: rgba(10, 22, 38, 0.92); stroke: var(--border); stroke-width: 1.2; }
-.rt-seat.vote-GREEN  circle { stroke: var(--h-green);  fill: rgba(61,240,200,0.16); }
-.rt-seat.vote-YELLOW circle { stroke: var(--h-yellow); fill: rgba(255,209,102,0.14); }
-.rt-seat.vote-RED    circle { stroke: var(--h-red);    fill: rgba(255,100,112,0.14); }
-.rt-seat.vote-BLACK  circle { stroke: var(--ink-faint); fill: rgba(0,0,0,0.45); }
-.rt-seat.thinking circle { stroke: var(--info); stroke-dasharray: 3 3;
-                            animation: rt-pulse 1.4s ease-in-out infinite; }
-@keyframes rt-pulse { 50% { opacity: 0.45; } }
-.rt-seat text { fill: var(--ink); font-family: var(--mono); }
-.rt-seat .seat-role { font-size: 9px; fill: var(--accent); font-weight: 700; letter-spacing: 0.04em; }
-.rt-seat .seat-id   { font-size: 9.5px; }
-.rt-seat .seat-tag  { font-size: 8.5px; fill: var(--ink-faint); }
-.rt-seat .seat-vote { font-size: 18px; font-weight: 700; }
-.rt-seat .seat-ms   { font-size: 8px; fill: var(--ink-faint); }
-.rt-director rect { fill: rgba(8,30,48,0.95); stroke: var(--warn); stroke-width: 1.5; }
-.rt-director text { fill: var(--warn); font-family: var(--mono); }
-.rt-director .ab-label { font-size: 11px; font-weight: 700; letter-spacing: 0.10em; }
-.rt-director .ab-vote  { font-size: 14px; font-weight: 700; }
-.rt-director .ab-id    { font-size: 9px; fill: var(--ink); letter-spacing: 0.04em; }
+/* ================== COUNCIL BENCH (HTML, horizontal) ================== */
+.council-bench {
+  flex: 1; min-height: 0;
+  display: flex; align-items: stretch; gap: 6px;
+  padding: 4px 0;
+}
+.bench-subject, .bench-seat, .bench-director {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 4px 6px;
+  background: rgba(10, 22, 38, 0.55);
+  border: 1px solid var(--border-2);
+  text-align: center;
+  font-size: 10.5px; line-height: 1.25;
+  min-width: 0;
+}
+.bench-subject {
+  border-color: var(--accent); background: rgba(61,240,200,0.06);
+  flex: 0 0 150px;
+}
+.bench-subject .bs-label  { color: var(--accent); font-size: 9px; letter-spacing: 0.16em; }
+.bench-subject .bs-name   { color: var(--ink); font-size: 13px; font-weight: 700; letter-spacing: 0.04em; }
+.bench-subject .bs-meta   { color: var(--ink-faint); font-size: 9.5px; }
+.bench-subject .bs-health { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; margin-top: 2px; }
+
+.bench-seat .bs-role { color: var(--accent); font-size: 8.5px; letter-spacing: 0.10em; font-weight: 700; }
+.bench-seat .bs-vote { font-size: 22px; font-weight: 700; line-height: 1; margin: 2px 0; }
+.bench-seat .bs-id   { color: var(--ink); font-size: 9.5px; }
+.bench-seat .bs-tag  { color: var(--ink-faint); font-size: 8.5px; }
+.bench-seat.vote-GREEN  { border-color: var(--h-green);  background: rgba(61,240,200,0.10); }
+.bench-seat.vote-YELLOW { border-color: var(--h-yellow); background: rgba(255,209,102,0.10); }
+.bench-seat.vote-RED    { border-color: var(--h-red);    background: rgba(255,100,112,0.10); }
+.bench-seat.vote-BLACK  { border-color: var(--ink-faint); background: rgba(0,0,0,0.35); }
+.bench-seat.thinking {
+  border-style: dashed; border-color: var(--info);
+  animation: rt-pulse 1.4s ease-in-out infinite;
+}
+@keyframes rt-pulse { 50% { opacity: 0.55; } }
+
+.bench-director {
+  flex: 0 0 170px;
+  border-color: var(--warn); background: rgba(255,209,102,0.07);
+}
+.bench-director.vote-GREEN  { border-color: var(--h-green);  background: rgba(61,240,200,0.10); }
+.bench-director.vote-YELLOW { border-color: var(--h-yellow); background: rgba(255,209,102,0.10); }
+.bench-director.vote-RED    { border-color: var(--h-red);    background: rgba(255,100,112,0.10); }
+.bench-director.vote-BLACK  { border-color: var(--ink-faint); background: rgba(0,0,0,0.35); }
+.bench-director.thinking    { border-style: dashed; }
+.bench-director .bs-role  { color: var(--warn); font-size: 9px; letter-spacing: 0.10em; font-weight: 700; }
+.bench-director .bs-vote  { font-size: 14px; font-weight: 700; margin: 2px 0; letter-spacing: 0.06em; }
+.bench-director .bs-id    { color: var(--ink); font-size: 9.5px; }
+.bench-director .bs-tag   { color: var(--ink-faint); font-size: 8.5px; }
 
 .rt-tally {
   margin-top: 4px;
@@ -359,12 +382,14 @@ body[data-layout="EARTH"] .panel-roundtable .rt-tally { display: flex; }
 .sat.h-RED    { fill: var(--h-red);    color: var(--h-red); }
 .sat.h-BLACK  { fill: var(--h-black);  color: var(--ink-faint); stroke: var(--ink-faint); }
 .sat.focused  { stroke: #fff; stroke-width: 1.2; }
-/* Visual-catalog (unassessed) — dim grey dots, no glow. */
+/* Visual-catalog (unassessed) — pale grey dots, no glow, slight back/front
+   depth so the populated shell reads as 3D. */
 .sat-bg {
-  fill: var(--h-unknown);
-  opacity: 0.5;
+  fill: #b8d2e6;
+  opacity: 0.72;
   pointer-events: none;
 }
+.sat-bg-back { opacity: 0.38; }
 .focus-track {
   fill: none; stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 4 4; opacity: 0.7;
 }

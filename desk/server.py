@@ -157,31 +157,43 @@ SATS = [
 # they're rendered as dim dots on the globe with attention_level = UNKNOWN.
 # ============================================================================
 
-def _build_visual_catalog(rng_seed: int = 42, target_total: int = 5000) -> list[dict]:
+def _build_visual_catalog(rng_seed: int = 42, target_total: int = 10000) -> list[dict]:
     rng = random.Random(rng_seed)
     cat: list[dict] = []
-    # Mix tracks roughly the real-public-catalog shape (Starlink-heavy)
+    # Mix tracks roughly the real-public-catalog shape (Starlink ~7k of ~12k).
+    # Multiple Starlink shells with distinct inclinations, plus the smaller
+    # comparison set. Phase, altitude, and inclination get jitter so the
+    # globe shows a populated 3D-feeling band instead of a single thin ring.
     mix = [
-        ("LEO-STARLINK", 4400, "v1.5/G4", 53.2, (530, 570)),
-        ("LEO-COMMS",     250, "OneWeb",  87.4, (1180, 1220)),
-        ("SSO-EO",        200, "EO",      98.6, (700,  830)),
-        ("MEO-NAV",        90, "Nav",     55.0, (19000, 23300)),
-        ("GEO",            60, "GEO",      0.1, (35780, 35792)),
+        ("STARLINK-G1",   2400, "v1.0/G1",   53.0,  (540, 560)),
+        ("STARLINK-G4",   3200, "v1.5/G4",   53.2,  (540, 570)),
+        ("STARLINK-G6",   1700, "v2.0-mini", 43.0,  (520, 550)),
+        ("STARLINK-G3",    700, "v1.5/G3",   97.6,  (560, 580)),
+        ("STARLINK-DTC",   400, "DTC",       53.0,  (535, 545)),
+        ("ONEWEB",         600, "OneWeb",    87.4,  (1180, 1220)),
+        ("IRIDIUM",         75, "Iridium",   86.4,  (775, 785)),
+        ("SSO-EO",         220, "EO",        98.6,  (700,  830)),
+        ("MEO-NAV",        120, "Nav",       55.0,  (19000, 23300)),
+        ("GEO",            120, "GEO",        0.1,  (35780, 35792)),
     ]
     norad = 70000
     for tag, n, shell, incl, alt_range in mix:
         for i in range(n):
             alt = rng.uniform(*alt_range)
-            inc = incl + rng.uniform(-2, 2)
+            inc = incl + rng.uniform(-1.5, 1.5)
+            phase = rng.random()
+            ring_jitter = rng.uniform(-0.05, 0.05)
             regime = ("LEO" if alt < 1500 else "SSO" if alt < 2000 else "MEO" if alt < 30000 else "GEO")
             cat.append({
                 "id": str(norad),
-                "name": f"{tag.split('-')[-1]}-{norad}",
+                "name": f"{tag}-{norad}",
                 "regime": regime,
                 "shell": shell,
                 "inclination_deg": round(inc, 2),
                 "altitude_km": round(alt, 1),
-                "attention_level": "UNKNOWN",   # not yet assessed — renders grey
+                "phase": round(phase, 4),         # 0..1, used by the renderer
+                "ring_jitter": round(ring_jitter, 4),
+                "attention_level": "UNKNOWN",
                 "health": "UNKNOWN",
                 "last_refresh_ts": None,
             })
