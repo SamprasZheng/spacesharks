@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Spaceshark Mission Desk</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+
+<!-- ====================== TOP BAR ====================== -->
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◣</span>
+    <div class="brand-stack">
+      <div class="brand-title">SPACESHARK <em>MISSION DESK</em></div>
+      <div class="brand-sub">OPERATIONAL OVERVIEW <span class="sep">|</span>
+        <span id="clock">--</span></div>
+    </div>
+  </div>
+  <div class="ops-strip">
+    <div class="ops-meter" title="Nimble Cloud daily token usage">
+      <span class="meter-label">NIMBLE CLOUD</span>
+      <div class="meter">
+        <i id="token-bar" class="meter-fill"></i>
+        <span class="meter-tick" style="left:25%"></span>
+        <span class="meter-tick" style="left:50%"></span>
+        <span class="meter-tick" style="left:75%"></span>
+      </div>
+      <span class="meter-val"><b id="token-spent">0</b> / <span id="token-quota">0</span></span>
+      <span class="meter-sub"><b id="token-pct">0.0%</b> · <span id="token-rate">0</span>/min</span>
+    </div>
+    <div class="ops-fleet">
+      <span class="meter-label">FLEET HEALTH</span>
+      <div class="dot-row">
+        <span class="health-pill health-GREEN"><i></i><b id="fh-green">0</b></span>
+        <span class="health-pill health-YELLOW"><i></i><b id="fh-yellow">0</b></span>
+        <span class="health-pill health-RED"><i></i><b id="fh-red">0</b></span>
+        <span class="health-pill health-BLACK"><i></i><b id="fh-black">0</b></span>
+      </div>
+    </div>
+    <div class="ops-director">
+      <span class="dir-line">FLIGHT DIRECTOR <b>S. Chen</b></span>
+      <span class="dir-line">FOCUS <b id="focus-name">--</b> · HEALTH <b id="focus-health">--</b></span>
+    </div>
+  </div>
+</header>
+
+<!-- ====================== MAIN GRID ====================== -->
+<main class="grid">
+
+  <!-- =========== LEFT: TRUST STACK =========== -->
+  <section class="panel panel-trust">
+    <header>
+      <span class="panel-title">NEMOCLAW TRUST STACK</span>
+      <span class="panel-sub">multi-model ensemble · 5 specialists</span>
+    </header>
+    <div class="trust-consensus">
+      <span class="trust-label">AI CONSENSUS</span>
+      <span class="trust-value" id="trust-pct">--%</span>
+      <span class="trust-label">on</span>
+      <span class="trust-value" id="trust-target">--</span>
+    </div>
+    <svg id="trust-svg" viewBox="0 0 280 220" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="trust-consensus-final" id="trust-final">CONSENSUS: ---</div>
+    <details class="collapsible">
+      <summary>view space-weather inputs</summary>
+      <div class="wx-grid" id="wx-grid"></div>
+    </details>
+  </section>
+
+  <!-- =========== CENTER TOP: EARTH =========== -->
+  <section class="panel panel-earth">
+    <header>
+      <span class="panel-title">ORBITAL TRAJECTORY TRACKING</span>
+      <span class="panel-sub">click any satellite to focus · health-coloured</span>
+    </header>
+    <div class="earth-wrap">
+      <svg id="earth" viewBox="0 0 800 520" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <radialGradient id="atmo-glow" cx="50%" cy="50%" r="58%">
+            <stop offset="65%" stop-color="rgba(20,80,150,0)"/>
+            <stop offset="85%" stop-color="rgba(80,180,255,0.18)"/>
+            <stop offset="100%" stop-color="rgba(80,180,255,0)"/>
+          </radialGradient>
+          <radialGradient id="earth-globe" cx="36%" cy="34%" r="64%">
+            <stop offset="0%"  stop-color="#3a7cff"/>
+            <stop offset="35%" stop-color="#0e3b76"/>
+            <stop offset="75%" stop-color="#031a36"/>
+            <stop offset="100%" stop-color="#01060f"/>
+          </radialGradient>
+          <radialGradient id="terminator" cx="78%" cy="50%" r="65%">
+            <stop offset="0%"  stop-color="rgba(0,0,0,0)"/>
+            <stop offset="55%" stop-color="rgba(0,0,0,0.55)"/>
+            <stop offset="100%" stop-color="rgba(0,0,0,0.85)"/>
+          </radialGradient>
+          <clipPath id="globe-clip">
+            <circle cx="400" cy="260" r="170"/>
+          </clipPath>
+          <filter id="sat-glow"><feGaussianBlur stdDeviation="1.2"/></filter>
+        </defs>
+        <g id="stars"></g>
+        <!-- Atmosphere -->
+        <circle cx="400" cy="260" r="230" fill="url(#atmo-glow)"/>
+        <!-- Globe body -->
+        <circle cx="400" cy="260" r="170" fill="url(#earth-globe)"/>
+        <!-- Continents and graticule clipped to globe -->
+        <g clip-path="url(#globe-clip)">
+          <g id="continents" fill="#0c5b3a" opacity="0.85"></g>
+          <g id="graticule" stroke="#264466" stroke-width="0.5" fill="none" opacity="0.55"></g>
+          <rect x="230" y="90" width="340" height="340" fill="url(#terminator)"/>
+        </g>
+        <!-- Globe edge ring -->
+        <circle cx="400" cy="260" r="170" fill="none" stroke="rgba(120,180,255,0.4)" stroke-width="1"/>
+        <!-- Orbit rings (LEO/SSO/MEO/GEO ellipses, eye-level perspective) -->
+        <g id="orbit-rings">
+          <ellipse class="orbit orbit-LEO" cx="400" cy="260" rx="195" ry="60"/>
+          <ellipse class="orbit orbit-SSO" cx="400" cy="260" rx="215" ry="95"/>
+          <ellipse class="orbit orbit-MEO" cx="400" cy="260" rx="290" ry="135"/>
+          <ellipse class="orbit orbit-GEO" cx="400" cy="260" rx="370" ry="195"/>
+        </g>
+        <!-- Sats and labels -->
+        <g id="sat-layer"></g>
+        <g id="focus-overlay"></g>
+        <!-- HUD readouts -->
+        <g id="hud" font-family="ui-monospace, monospace" font-size="11">
+          <text id="hud-alt" x="20" y="30" fill="#3df0c8"></text>
+          <text id="hud-vel" x="20" y="48" fill="#3df0c8"></text>
+          <text id="hud-incl" x="20" y="66" fill="#7aa2ff"></text>
+          <text id="hud-op"   x="20" y="84" fill="#7aa2ff"></text>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- =========== RIGHT: AI COPILOT =========== -->
+  <section class="panel panel-copilot">
+    <header>
+      <span class="panel-title">AI COPILOT</span>
+      <span class="panel-sub">[ NEMOCLAW ]</span>
+    </header>
+    <div class="copilot-stream" id="copilot-stream"></div>
+    <div class="copilot-foot">
+      <div class="recommend" id="recommend-card">
+        <span class="rec-label">PENDING RECOMMENDATION</span>
+        <div class="rec-body" id="rec-body">awaiting…</div>
+      </div>
+      <div class="rec-actions">
+        <button class="btn-approve" id="btn-approve">APPROVE COMMAND</button>
+        <button class="btn-review" id="btn-review">REVIEW LOGS</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========== BOTTOM LEFT: LIFECYCLE =========== -->
+  <section class="panel panel-lifecycle">
+    <header>
+      <span class="panel-title">SATELLITE LIFECYCLE</span>
+      <span class="panel-sub" id="lc-sat">--</span>
+    </header>
+    <div class="chevrons" id="lifecycle">
+      <div class="chev" data-stage="Pre-Launch"><span>Pre-Launch</span><i></i></div>
+      <div class="chev" data-stage="In-Orbit Operations"><span>In-Orbit Operations</span><i></i></div>
+      <div class="chev" data-stage="Event Management"><span>Event Management</span><i></i></div>
+      <div class="chev" data-stage="Deorbiting / Disposal"><span>Deorbiting / Disposal</span><i></i></div>
+      <div class="chev" data-stage="Decommissioned"><span>Decommissioned</span><i></i></div>
+    </div>
+    <div class="lc-stats" id="lc-stats"></div>
+  </section>
+
+  <!-- =========== BOTTOM CENTER: TELEMETRY =========== -->
+  <section class="panel panel-telemetry">
+    <header>
+      <span class="panel-title">TELEMETRY METRICS</span>
+      <span class="panel-sub" id="tel-sat">SAT-? LIVE</span>
+    </header>
+    <div class="telemetry">
+      <div class="tel-row">
+        <span class="tel-label">Altitude (km)</span>
+        <svg class="tel-svg" viewBox="0 0 300 60" preserveAspectRatio="none">
+          <polyline id="tel-alt" class="tel-line tel-line-c" fill="none" stroke-width="1.6"/>
+        </svg>
+        <b class="tel-val tel-c" id="tel-alt-val">--</b>
+      </div>
+      <div class="tel-row">
+        <span class="tel-label">Velocity (km/s)</span>
+        <svg class="tel-svg" viewBox="0 0 300 60" preserveAspectRatio="none">
+          <polyline id="tel-vel" class="tel-line tel-line-b" fill="none" stroke-width="1.6"/>
+        </svg>
+        <b class="tel-val tel-b" id="tel-vel-val">--</b>
+      </div>
+      <div class="tel-row">
+        <span class="tel-label">Signal (dBm)</span>
+        <svg class="tel-svg" viewBox="0 0 300 60" preserveAspectRatio="none">
+          <polyline id="tel-sig" class="tel-line tel-line-a" fill="none" stroke-width="1.6"/>
+        </svg>
+        <b class="tel-val tel-a" id="tel-sig-val">--</b>
+      </div>
+    </div>
+  </section>
+
+  <!-- =========== BOTTOM RIGHT: SAT DOSSIER =========== -->
+  <section class="panel panel-dossier">
+    <header>
+      <span class="panel-title">SAT DOSSIER</span>
+      <span class="panel-sub" id="dos-sat">--</span>
+    </header>
+    <div class="dossier" id="dossier"></div>
+    <div class="health-factors" id="health-factors"></div>
+  </section>
+
+</main>
+
+<!-- ====================== DRAWER (collapsible secondary) ====================== -->
+<aside class="drawer collapsed" id="drawer">
+  <button class="drawer-toggle" id="drawer-toggle">
+    <span class="drawer-arrow">▾</span> SECONDARY PANELS · log · alerts · terminal · fleet table
+  </button>
+  <div class="drawer-body">
+    <div class="drawer-grid">
+      <section class="panel">
+        <header><span class="panel-title">ASSESSMENT LOG</span><span class="panel-sub" id="log-count">0</span></header>
+        <ol class="log" id="log-body"></ol>
+      </section>
+      <section class="panel panel-alerts">
+        <header><span class="panel-title">ALERTS</span><span class="panel-sub" id="alert-count">0</span></header>
+        <ul class="alerts" id="alerts-body"></ul>
+      </section>
+      <section class="panel">
+        <header><span class="panel-title">FLEET TABLE</span><span class="panel-sub">click row → focus</span></header>
+        <table class="fleet"><thead>
+          <tr><th>HEALTH</th><th>NAME</th><th>REGIME</th><th>AGE/LIFE</th><th>TID%</th><th>SCORE</th></tr>
+        </thead><tbody id="fleet-body"></tbody></table>
+      </section>
+      <section class="panel">
+        <header><span class="panel-title">TERMINAL</span><span class="panel-sub">type <code>help</code></span></header>
+        <div class="term">
+          <pre id="term-output">root@spaceshark:~$ status
+(loading…)
+</pre>
+          <form id="term-form">
+            <span class="prompt">root@spaceshark:~$</span>
+            <input id="term-input" autocomplete="off" spellcheck="false"/>
+          </form>
+        </div>
+      </section>
+    </div>
+  </div>
+</aside>
+
+<script src="/app.js"></script>
+</body>
+</html>

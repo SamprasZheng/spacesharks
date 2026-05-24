@@ -38,6 +38,8 @@ data/lifecycle-events/*.jsonl
 data/captures/
 data/snapshots/
 !data/samples/
+desk/data/*.jsonl
+desk/data/evidence-blobs/
 
 # Logs
 *.log
