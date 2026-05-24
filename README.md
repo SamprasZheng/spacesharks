@@ -1,41 +1,53 @@
 # Spacesharks Mission Desk
 
-> An autonomous AI desk that doesn't just watch the space industry — it predicts every phase of the satellite lifecycle, recommends operator actions, archives every event into a labeled dataset future operators will pay for, and posts its own track record.
+> A low-cost, traceable satellite operations copilot that turns public space signals into actionable recommendations.
 
-Built for the **NVIDIA Agent Challenge 2026** at GTC Taipei (deadline 2026-05-28). Powered by [NVIDIA Nemotron](https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/) for reasoning, sandboxed by [NVIDIA NemoClaw](https://github.com/NVIDIA/NemoClaw), persistent via [NousResearch Hermes Agent](https://github.com/NousResearch/hermes-agent).
+Spacesharks is built around one core idea: do not rely on a single expensive model to guess what is happening in orbit. Instead, use a safe runtime, multiple lightweight models, and provenance-first event logging to produce recommendations that operators can inspect, replay, and trust.
 
-## What it is
+## Why this matters
 
-A long-running agent (not a dashboard, not a chatbot) that operates as a satellite-lifecycle decision co-pilot. It ingests environmental + telemetry-adjacent signals in real time, reasons about implications per individual satellite, and produces **executable operator decisions** — while quietly accumulating a structured, source-linked satellite-lifecycle event dataset.
+Satellite operations span many fragile signals: space weather, conjunctions, launch slips, regulatory notices, and orbital decay. Those signals are scattered across many sources and rarely organized into a decision loop that is:
 
-## Lifecycle taxonomy
+- continuous
+- source-linked
+- cost-aware
+- safe to run for long periods
 
-The agent owns five phases of every satellite. Each phase has defined signals, at least one decision action, and a dataset row schema.
+Spacesharks is the attempt to close that gap.
 
-| Phase | Decision action(s) | Signal sources |
-|---|---|---|
-| Pre-launch | Slip probability score, readiness checklist gap flag, survivability brief | FAA NOTAM, weather, FCC/ITU clock |
-| Launch & ascent | Telemetry envelope anomaly flag | Vehicle historical data, operator releases |
-| Commissioning (D+0 to D+30) | Day-N baseline deviation alert | Anomaly database by sat class |
-| **On-orbit operations** | **Safe-mode trigger, momentum dump window, conjunction triage, interference attribution** | NOAA SWPC, GOES, Celestrak, Space-Track CDM, FCC IBFS |
-| EOL & deorbit | Decay-window prediction, passivation draft, ITU notice timing | TLE decay, atmospheric density |
+## Core stack
 
-## Agent verbs (≠ "monitor")
+- `NemoClaw`: sandbox and policy boundary
+- `OpenClaw`: 24/7 realtime / long-run execution layer
+- `Nemotron`: primary reasoning model for higher-trust decisions
+- Small-model ensemble: classification, scoring, and recommendation support
+- `OpenRouter`: optional cost fallback when a lighter route is enough
 
-`Predict` · `Recommend` · `Score` · `Brief` · `Patch-self` (Hermes skill creation) · `Publish-selectively` · `Debate` (Jamia × Spacesharks two-agent dialectic)
+## What the system does
 
-## Canonical plan
+1. Ingests a small set of high-value public signals
+2. Normalizes them into timestamped events
+3. Runs a lightweight ensemble to classify, score, and draft recommendations
+4. Escalates uncertain or high-risk cases to stronger reasoning
+5. Stores every event, decision, and disagreement in a replayable log
 
-Full plan, defensibility argument, 2+2 day milestone schedule, demo deliverables, and risk register live in the author's wiki:
+## What this repository should prove
 
-→ [`yxz/wiki/synthesis/spacesharks-mission-desk-hackathon-plan.md`](https://github.com/SamprasZheng/yxz/blob/wiki/nemoclaw-hermes-runbook/wiki/synthesis/spacesharks-mission-desk-hackathon-plan.md)
+- The runtime can stay up for 24 hours without manual babysitting
+- The system can produce useful recommendations at low cost
+- Every recommendation can be traced back to evidence
+- Lightweight models plus arbitration can be more practical than a single large model
 
-The knowledge base the agent retrieves from (orbit dose budgeting, TID/SEE physics, solar cycle 25, RHA, LEO value chain, etc.) also lives in [`SamprasZheng/yxz`](https://github.com/SamprasZheng/yxz) under `wiki/concepts/`.
+## Docs
+
+- [Scope and non-goals](docs/SCOPE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Trust model](docs/TRUST.md)
+- [Hackathon plan](docs/PLAN.md)
+- [Roadmap (post-MVP)](docs/ROADMAP.md) — phased expansion grounded on existing RF, thermal-mechanical, and signal-processing work. Read only after the MVP is shipped; nothing here belongs in the hackathon scope.
+- [Local research catalog](docs/research/INDEX.md) — index of local `D:\` material that feeds the roadmap.
+- [Research notes](docs/research/index.md)
 
 ## Status
 
-Day 0 — scaffold only. Build begins 2026-05-24.
-
-## License
-
-Apache-2.0. Aligned with the NVIDIA NemoClaw / OpenShell upstream license model.
+Scaffold stage. The current goal is to keep the scope narrow enough to ship, while preserving a larger roadmap for later phases.
