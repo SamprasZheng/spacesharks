@@ -60,6 +60,13 @@ from desk.nemoclaw import (
     policy_egress_allowlist as _nemoclaw_egress_allowlist,
 )
 
+# NEO Action Item 2 — SGP4 propagation + simulated COTS telemetry + JPL
+# nonparametric dynamic threshold. Operates under INVARIANTS override O1
+# (source-list-lock 5th input is local synthetic only — no new external egress).
+# See docs/INVARIANTS.md §"How to use this document".
+from desk.physics import TelemetryStream, propagate as sgp4_propagate, telemetry_buffer_for
+from desk.detect import detect as jpl_detect
+
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 DATA = ROOT / "data"
@@ -1468,6 +1475,113 @@ def estimated_token_rate() -> int:
 
 
 # ============================================================================
+# NEO Action Item 2 — COTS telemetry + JPL anomaly detection.
+# ============================================================================
+
+# 50 Hz stream — initialised lazily on first access so unit-tests can run
+# without booting the worker thread.
+COTS_STREAM: TelemetryStream | None = None
+COTS_TICK_HZ = 50.0
+COTS_DETECTOR_INTERVAL_S = 2.0   # run JPL detector every 2s per sat
+COTS_LAST_DETECT: dict[str, float] = {}  # sat_id -> last detector run ts
+COTS_LATEST: dict[str, dict] = {}        # sat_id -> last detector result dict
+
+
+def cots_init() -> TelemetryStream:
+    """Lazy init for the global stream — call after SATS roster is built."""
+    global COTS_STREAM
+    if COTS_STREAM is None:
+        COTS_STREAM = TelemetryStream([s["id"] for s in SATS])
+        BUS.copilot("nemoclaw",
+                    f"COTS telemetry stream initialised at {COTS_TICK_HZ:.0f} Hz over {len(SATS)} sats",
+                    severity="INFO", action="COTS_STREAM_INIT",
+                    override_invariant="O1-source-list-5th-input")
+    return COTS_STREAM
+
+
+def cots_orbit_lookup(sat_id: str) -> dict | None:
+    """Used by TelemetryStream.tick() to modulate the stream by eclipse / SAA."""
+    return sgp4_propagate(sat_id, ts_utc=time.time())
+
+
+def cots_run_detector(sat_id: str) -> dict:
+    """Run JPL detector on the current 1024-sample current_mA window for
+    `sat_id`. Writes an audit row when an anomaly is detected. Returns the
+    detector result as a dict for /api/cots/telemetry/<sat_id>.
+    """
+    stream = cots_init()
+    series = telemetry_buffer_for(stream, sat_id, "current_mA")
+    if len(series) < 32:
+        return {"sat_id": sat_id, "is_anomaly": False,
+                "regime": "insufficient_window", "samples": len(series)}
+    res = jpl_detect(series, metric="current_mA")
+    out = {
+        "sat_id": sat_id,
+        "is_anomaly": res.is_anomaly,
+        "magnitude": res.magnitude,
+        "regime": res.regime,
+        "threshold": res.threshold,
+        "z": res.z,
+        "n_above": res.n_above,
+        "samples": len(series),
+        "ts": time.time(),
+    }
+    COTS_LATEST[sat_id] = out
+    COTS_LAST_DETECT[sat_id] = time.time()
+    if res.is_anomaly:
+        # Write an audit row + flip the sat's health hint. The existing
+        # assessment_loop will still vote — we only flag the sat as
+        # `attention: cots-anomaly` so the dashboard can highlight it.
+        BUS.copilot("nemoclaw",
+                    f"COTS anomaly on {sat_id} — regime={res.regime}, "
+                    f"magnitude={res.magnitude:.2f}σ above threshold {res.threshold:.2f}",
+                    severity="HIGH", action="COTS_ANOMALY", sat_id=sat_id,
+                    anomaly_regime=res.regime, anomaly_magnitude=res.magnitude,
+                    override_invariant="O1-source-list-5th-input")
+        # Also mirror to the sat record so the dashboard shows the regime.
+        sat = find_sat(sat_id)
+        if sat:
+            sat["cots_anomaly"] = {
+                "regime": res.regime,
+                "magnitude": res.magnitude,
+                "ts": time.time(),
+            }
+    return out
+
+
+def cots_telemetry_loop() -> None:
+    """50 Hz background thread — ticks the stream, runs the JPL detector
+    every COTS_DETECTOR_INTERVAL_S per sat. Uses the existing WEATHER state
+    so the stream is modulated by space-weather conditions."""
+    stream = cots_init()
+    period = 1.0 / COTS_TICK_HZ
+    next_tick = time.time()
+    while True:
+        if _RUN_FLAG["value"]:
+            try:
+                wx = WEATHER.snapshot()
+                stream.tick(weather=wx, orbit_lookup=cots_orbit_lookup)
+                # Throttled detector runs per sat
+                now_ts = time.time()
+                for s in SATS:
+                    last = COTS_LAST_DETECT.get(s["id"], 0.0)
+                    if now_ts - last >= COTS_DETECTOR_INTERVAL_S:
+                        cots_run_detector(s["id"])
+            except Exception as e:
+                BUS.copilot("nemoclaw",
+                            f"cots_telemetry_loop error: {e}",
+                            severity="HIGH", action="COTS_LOOP_ERROR")
+                time.sleep(1.0)
+        next_tick += period
+        sleep_for = next_tick - time.time()
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        else:
+            # Falling behind — reset the clock so we don't spin
+            next_tick = time.time()
+
+
+# ============================================================================
 # Background loops.
 # ============================================================================
 
@@ -1787,6 +1901,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(audit_tail(max(1, min(n, 200)))); return
         if path == "/api/audit/policy-hash":
             self._send_json({"policy_preset_hash": _nemoclaw_policy_hash()}); return
+        # NEO Action Item 2 — COTS telemetry + JPL detector surfaces
+        if path.startswith("/api/cots/telemetry/"):
+            sat_id = path.rsplit("/", 1)[1]
+            self._send_json(cots_run_detector(sat_id)); return
+        if path == "/api/cots/latest":
+            self._send_json({"results": COTS_LATEST}); return
         self.send_error(404)
 
     def _serve_sse(self) -> None:
@@ -1839,6 +1959,27 @@ class Handler(BaseHTTPRequestHandler):
             kind = body.get("kind", "flare")
             run_terminal_command(f"storm {kind}")
             self._send_json({"ok": True}); return
+        if self.path == "/api/dev/inject-anomaly":
+            # NEO Action Item 2 — manual SEE / dielectric_charge anomaly injection
+            # for demo runs. Triggers a cooldown spike in the COTS stream that
+            # the JPL detector picks up within ~2s.
+            sat_id = str(body.get("sat", ""))
+            kind = body.get("kind", "see")
+            stream = cots_init()
+            if sat_id not in stream.known_sats():
+                self._send_json({"error": f"unknown sat {sat_id}"}, status=404); return
+            with stream._lock:
+                st = stream._states[sat_id]
+                if kind == "see":
+                    st.see_cooldown_ticks = int(stream.hz * 1.5)
+                elif kind in ("dielectric_charge", "charge"):
+                    st.charge_cooldown_ticks = int(stream.hz * 0.6)
+                else:
+                    self._send_json({"error": f"unknown kind {kind}"}, status=400); return
+            BUS.copilot("user", f"manual COTS anomaly injection ({kind}) on {sat_id}",
+                        severity="MED", action="COTS_INJECT", sat_id=sat_id, kind=kind,
+                        override_invariant="O1-source-list-5th-input")
+            self._send_json({"ok": True, "sat": sat_id, "kind": kind}); return
         if self.path == "/api/probe-ollama":
             result = probe_ollama()
             BUS.publish({"type": "inference", "inference": inference_view(), "probe": result})
@@ -1902,6 +2043,8 @@ def main() -> None:
     threading.Thread(target=copilot_loop, daemon=True).start()
     threading.Thread(target=token_history_loop, daemon=True).start()
     threading.Thread(target=reprobe_loop, daemon=True).start()
+    # NEO Action Item 2 — COTS telemetry + JPL detector
+    threading.Thread(target=cots_telemetry_loop, daemon=True).start()
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[spacesharks-desk] http://{args.host}:{args.port}/  (writing {JSONL})", flush=True)
