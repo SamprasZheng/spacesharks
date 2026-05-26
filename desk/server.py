@@ -2101,6 +2101,133 @@ def neo_test_status_loop() -> None:
         time.sleep(300)
 
 
+# ============================================================================
+# NEO time-series collectors — Prometheus-style versus-time history so the
+# dashboard can draw sparklines instead of just showing the current value.
+#
+# Each deque holds {ts, value} dicts. Cadence ranges from 1/min (SWPC,
+# fleet-health) to per-call (LLM latencies). Bounded by maxlen so memory
+# never grows unbounded.
+# ============================================================================
+
+_TS_LOCK = threading.Lock()
+NEO_TIMESERIES: dict[str, deque] = {
+    "swpc_kp":          deque(maxlen=720),   # 12h @ 1/min
+    "swpc_xray":        deque(maxlen=720),
+    "swpc_sep":         deque(maxlen=720),
+    "llm_latency_ms":   deque(maxlen=400),   # last 400 LLM calls
+    "llm_calls_per_min": deque(maxlen=720),  # per-minute aggregate
+    "audit_actions_per_min": deque(maxlen=720),
+    "fleet_green":      deque(maxlen=720),
+    "fleet_yellow":     deque(maxlen=720),
+    "fleet_red":        deque(maxlen=720),
+    "fleet_black":      deque(maxlen=720),
+    "fleet_unknown":    deque(maxlen=720),
+    "cots_anomaly_count": deque(maxlen=720),
+    "gpu_vram_pct":     deque(maxlen=720),
+}
+
+# Per-minute aggregators reset by neo_timeseries_minute_loop.
+_TS_MINUTE_AGG = {
+    "llm_calls_at_start": 0,
+    "audit_actions_at_start": 0,
+}
+
+
+def _ts_record(metric: str, value: float, ts: float | None = None) -> None:
+    if value is None:
+        return
+    if ts is None:
+        ts = time.time()
+    with _TS_LOCK:
+        d = NEO_TIMESERIES.get(metric)
+        if d is not None:
+            d.append({"ts": ts, "v": float(value)})
+
+
+def neo_timeseries_minute_loop() -> None:
+    """Once per minute, snapshot SWPC + fleet health + audit rate + LLM rate.
+
+    First sample fires after a short 8s warm-up (so SWPC/Ollama probes have
+    completed) — gives the dashboard charts visible data on first load
+    instead of "(no samples yet)".
+    """
+    last_llm_calls = INFERENCE.get("live_calls", 0)
+    first = True
+    while True:
+        time.sleep(8 if first else 60)
+        first = False
+        try:
+            now_ts = time.time()
+            # SWPC values from the cached WEATHER snapshot
+            wx = WEATHER.snapshot()
+            _ts_record("swpc_kp",   wx.get("kp"),    now_ts)
+            _ts_record("swpc_xray", wx.get("xray"),  now_ts)
+            _ts_record("swpc_sep",  wx.get("sep_pfu"), now_ts)
+            # Fleet health
+            fh = fleet_health_counts()
+            for color in ("GREEN", "YELLOW", "RED", "BLACK", "UNKNOWN"):
+                _ts_record(f"fleet_{color.lower()}", fh.get(color, 0), now_ts)
+            # LLM call rate over this minute
+            cur_llm_calls = INFERENCE.get("live_calls", 0)
+            delta = max(0, cur_llm_calls - last_llm_calls)
+            last_llm_calls = cur_llm_calls
+            _ts_record("llm_calls_per_min", delta, now_ts)
+            # Audit action rate over this minute (read from in-memory tail)
+            recent_audit = audit_tail(200)
+            audit_count = sum(1 for r in recent_audit
+                              if now_ts - _parse_ts(r.get("ts","")) < 60)
+            _ts_record("audit_actions_per_min", audit_count, now_ts)
+            # COTS anomaly count (any anomalous sat right now)
+            anom = sum(1 for v in COTS_LATEST.values() if v.get("is_anomaly"))
+            _ts_record("cots_anomaly_count", anom, now_ts)
+            # GPU VRAM
+            gpu = INFERENCE.get("host_gpu") or host_gpu_snapshot()
+            if gpu and gpu.get("mem_total_mib"):
+                pct = 100.0 * gpu["mem_used_mib"] / gpu["mem_total_mib"]
+                _ts_record("gpu_vram_pct", pct, now_ts)
+        except Exception as e:
+            BUS.copilot("nemoclaw", f"neo_timeseries_minute_loop error: {e}",
+                        severity="MED", action="NEO_TS_ERROR")
+
+
+def _parse_ts(iso: str) -> float:
+    """Parse 2026-05-27T10:23:45.123Z → unix epoch float. Returns 0 on parse fail."""
+    if not iso:
+        return 0.0
+    try:
+        # Strip the trailing Z and the millisecond suffix if present
+        s = iso.rstrip("Z")
+        if "." in s:
+            s = s.split(".", 1)[0]
+        dt = datetime.strptime(s, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def _neo_timeseries_view(metric: str | None) -> dict:
+    """If metric is None, return a list of available metrics + their latest value."""
+    with _TS_LOCK:
+        if metric is None:
+            out = {"metrics": {}, "available": list(NEO_TIMESERIES.keys())}
+            for name, dq in NEO_TIMESERIES.items():
+                if dq:
+                    out["metrics"][name] = {"latest": dq[-1]["v"], "samples": len(dq)}
+                else:
+                    out["metrics"][name] = {"latest": None, "samples": 0}
+            return out
+        dq = NEO_TIMESERIES.get(metric)
+        if dq is None:
+            return {"error": f"unknown metric {metric}", "available": list(NEO_TIMESERIES.keys())}
+        return {
+            "metric": metric,
+            "samples": list(dq),
+            "count": len(dq),
+            "now_ts": time.time(),
+        }
+
+
 def _neo_provenance_view() -> dict:
     """Lightweight aggregation of what's currently backed by real LLM calls.
     Surfaces in the dashboard so judges/reviewers see what's real-time-LLM.
@@ -2394,6 +2521,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(NEO_TEST_STATUS); return
         if path == "/api/neo/provenance":
             self._send_json(_neo_provenance_view()); return
+        if path == "/api/neo/timeseries":
+            metric = None
+            if "?" in self.path:
+                q = self.path.split("?", 1)[1]
+                for pair in q.split("&"):
+                    if pair.startswith("metric="):
+                        metric = pair.split("=", 1)[1]
+            self._send_json(_neo_timeseries_view(metric)); return
         self.send_error(404)
 
     def _serve_sse(self) -> None:
@@ -2621,6 +2756,8 @@ def main() -> None:
     threading.Thread(target=neo_tactical_brief_loop, daemon=True).start()
     # NEO test-status — pytest every 5min
     threading.Thread(target=neo_test_status_loop, daemon=True).start()
+    # NEO time-series — Prometheus-style sample collectors @ 1/min
+    threading.Thread(target=neo_timeseries_minute_loop, daemon=True).start()
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[spacesharks-desk] http://{args.host}:{args.port}/  (writing {JSONL})", flush=True)

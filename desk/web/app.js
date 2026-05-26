@@ -652,6 +652,267 @@
   refreshNeoBrief(); setInterval(refreshNeoBrief, 10_000);
   refreshNeoTestStatus(); setInterval(refreshNeoTestStatus, 30_000);
 
+  // ---------------------------------------------------------------- NEO workspaces
+  // Tabs: Operations / Analysis / Developer (Slingshot-style).
+  const NEO_VIEWS = {
+    operations: $("neo-operations-view"),
+    analysis:   $("neo-analysis-view"),
+    developer:  $("neo-developer-view"),
+  };
+  function setNeoView(name) {
+    Object.entries(NEO_VIEWS).forEach(([k, el]) => {
+      if (el) el.style.display = (k === name) ? "" : "none";
+    });
+    document.querySelectorAll(".neo-tab").forEach(btn => {
+      const active = btn.dataset.view === name;
+      btn.style.color = active ? "#7dd3fc" : "#64748b";
+      btn.style.borderBottom = active ? "2px solid #38bdf8" : "2px solid transparent";
+      btn.classList.toggle("neo-tab-active", active);
+    });
+    if (name === "operations") refreshNeoCharts();
+    if (name === "developer")  refreshNeoDevView();
+  }
+  document.querySelectorAll(".neo-tab").forEach(btn =>
+    btn.addEventListener("click", () => setNeoView(btn.dataset.view))
+  );
+  // Default tab — start on Operations so user sees the time-series charts first
+  setNeoView("operations");
+
+  // ---------------------------------------------------------------- $0 cloud badge
+  async function refreshCloudBadge() {
+    try {
+      const r = await fetch("/api/state").then(r => r.json());
+      const calls = (r.inference || {}).live_calls || 0;
+      $("neo-cloud-calls").textContent = calls;
+      $("neo-cloud-nim").textContent = "0"; // we never call NIM cloud yet
+    } catch (e) { /* ignore */ }
+  }
+  refreshCloudBadge(); setInterval(refreshCloudBadge, 5_000);
+
+  // ---------------------------------------------------------------- SVG sparkline renderer
+  // Minimal, no external lib. Draws a polyline + optional area-fill + axis.
+  function drawSparkline(svgId, samples, opts = {}) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    const vbox = svg.getAttribute("viewBox").split(/\s+/).map(Number);
+    const W = vbox[2], H = vbox[3];
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (!samples || samples.length === 0) {
+      const t = document.createElementNS(svgNS, "text");
+      t.setAttribute("x", W/2); t.setAttribute("y", H/2);
+      t.setAttribute("text-anchor", "middle");
+      t.setAttribute("fill", "#475569");
+      t.setAttribute("font-size", "11");
+      t.textContent = "(no samples yet — wait 60s)";
+      svg.appendChild(t);
+      return;
+    }
+    const stroke = opts.stroke || "#38bdf8";
+    const fill = opts.fill || "rgba(56,189,248,0.16)";
+    const log = opts.log === true;
+    const minY = opts.minY;
+    const maxY = opts.maxY;
+
+    const xs = samples.map((_, i) => i);
+    let ys = samples.map(s => Number(s.v) || 0);
+    if (log) ys = ys.map(v => Math.log10(Math.max(v, 1e-12)));
+
+    const minX = 0, maxX = Math.max(1, xs.length - 1);
+    const ymin = (minY !== undefined) ? minY : Math.min(...ys);
+    const ymax = (maxY !== undefined) ? maxY : Math.max(...ys);
+    const yrange = (ymax - ymin) || 1;
+
+    const padL = 4, padR = 4, padT = 4, padB = 12;
+    const sx = (x) => padL + (x - minX) / (maxX - minX || 1) * (W - padL - padR);
+    const sy = (y) => padT + (1 - (y - ymin) / yrange) * (H - padT - padB);
+
+    // axis baseline
+    const baseline = document.createElementNS(svgNS, "line");
+    baseline.setAttribute("x1", padL); baseline.setAttribute("x2", W - padR);
+    baseline.setAttribute("y1", H - padB); baseline.setAttribute("y2", H - padB);
+    baseline.setAttribute("stroke", "#1e3a52"); baseline.setAttribute("stroke-width", "0.5");
+    svg.appendChild(baseline);
+
+    // area
+    if (fill !== "none") {
+      const area = document.createElementNS(svgNS, "path");
+      let d = `M ${sx(0)} ${H - padB} `;
+      ys.forEach((y, i) => { d += `L ${sx(i)} ${sy(y)} `; });
+      d += `L ${sx(ys.length - 1)} ${H - padB} Z`;
+      area.setAttribute("d", d); area.setAttribute("fill", fill);
+      svg.appendChild(area);
+    }
+
+    // polyline
+    const line = document.createElementNS(svgNS, "polyline");
+    line.setAttribute("points", ys.map((y, i) => `${sx(i)},${sy(y)}`).join(" "));
+    line.setAttribute("fill", "none");
+    line.setAttribute("stroke", stroke);
+    line.setAttribute("stroke-width", "1.4");
+    line.setAttribute("vector-effect", "non-scaling-stroke");
+    svg.appendChild(line);
+
+    // last-value marker
+    const lastX = sx(ys.length - 1), lastY = sy(ys[ys.length - 1]);
+    const dot = document.createElementNS(svgNS, "circle");
+    dot.setAttribute("cx", lastX); dot.setAttribute("cy", lastY);
+    dot.setAttribute("r", "2.5"); dot.setAttribute("fill", stroke);
+    svg.appendChild(dot);
+
+    // value label
+    const t = document.createElementNS(svgNS, "text");
+    t.setAttribute("x", lastX - 4); t.setAttribute("y", Math.max(10, lastY - 4));
+    t.setAttribute("text-anchor", "end");
+    t.setAttribute("fill", stroke);
+    t.setAttribute("font-size", "10");
+    t.setAttribute("font-family", "ui-monospace,monospace");
+    const v = samples[samples.length - 1].v;
+    t.textContent = log ? v.toExponential(2) : v.toFixed(2);
+    svg.appendChild(t);
+  }
+
+  function drawStackedFleet(svgId, byColor) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    const vbox = svg.getAttribute("viewBox").split(/\s+/).map(Number);
+    const W = vbox[2], H = vbox[3];
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const colors = ["fleet_green","fleet_yellow","fleet_red","fleet_black","fleet_unknown"];
+    const palette = {
+      fleet_green: "#3df0c8", fleet_yellow: "#ffd166", fleet_red: "#ff6470",
+      fleet_black: "#475569", fleet_unknown: "#1e293b",
+    };
+    const N = Math.max(...colors.map(c => (byColor[c] || []).length));
+    if (N === 0) {
+      const t = document.createElementNS(svgNS, "text");
+      t.setAttribute("x", W/2); t.setAttribute("y", H/2);
+      t.setAttribute("text-anchor", "middle"); t.setAttribute("fill", "#475569");
+      t.setAttribute("font-size", "11");
+      t.textContent = "(no samples yet — wait 60s)";
+      svg.appendChild(t);
+      return;
+    }
+    const padL = 4, padR = 4, padT = 4, padB = 14;
+    const xs = (i) => padL + (i / Math.max(1, N - 1)) * (W - padL - padR);
+    // Compute per-tick totals to normalise
+    const totals = [];
+    for (let i = 0; i < N; i++) {
+      let t = 0;
+      for (const c of colors) t += ((byColor[c] || [])[i] || {v: 0}).v;
+      totals.push(t || 1);
+    }
+    let yTop = new Array(N).fill(0);
+    colors.forEach(color => {
+      const series = byColor[color] || [];
+      const path = document.createElementNS(svgNS, "path");
+      let dTop = "";
+      let dBot = "";
+      for (let i = 0; i < N; i++) {
+        const v = (series[i] || {v: 0}).v;
+        const yPrev = yTop[i];
+        const yCur  = yPrev + v;
+        const yPrevPx = padT + (1 - yPrev / totals[i]) * (H - padT - padB);
+        const yCurPx  = padT + (1 - yCur  / totals[i]) * (H - padT - padB);
+        dTop += (i === 0 ? "M" : " L") + ` ${xs(i)} ${yCurPx}`;
+        dBot = `L ${xs(i)} ${yPrevPx} ` + dBot;
+        yTop[i] = yCur;
+      }
+      path.setAttribute("d", dTop + " " + dBot + " Z");
+      path.setAttribute("fill", palette[color]);
+      path.setAttribute("fill-opacity", "0.75");
+      svg.appendChild(path);
+    });
+    // legend
+    let lx = padL + 6;
+    [["GREEN","#3df0c8"],["YELLOW","#ffd166"],["RED","#ff6470"],["BLACK","#475569"],["UNKNOWN","#1e293b"]].forEach(([lbl, col]) => {
+      const r = document.createElementNS(svgNS, "rect");
+      r.setAttribute("x", lx); r.setAttribute("y", H - 10);
+      r.setAttribute("width", 8); r.setAttribute("height", 6);
+      r.setAttribute("fill", col); svg.appendChild(r);
+      const t = document.createElementNS(svgNS, "text");
+      t.setAttribute("x", lx + 12); t.setAttribute("y", H - 4);
+      t.setAttribute("fill", "#64748b"); t.setAttribute("font-size", "9");
+      t.setAttribute("font-family", "ui-monospace,monospace");
+      t.textContent = lbl;
+      svg.appendChild(t);
+      lx += lbl.length * 6 + 30;
+    });
+  }
+
+  async function fetchMetric(name) {
+    try {
+      const r = await fetch(`/api/neo/timeseries?metric=${name}`).then(r => r.json());
+      return r.samples || [];
+    } catch (e) { return []; }
+  }
+
+  async function refreshNeoCharts() {
+    const [kp, xray, sep, llmRate, vram, auditRate, cots] = await Promise.all([
+      fetchMetric("swpc_kp"), fetchMetric("swpc_xray"), fetchMetric("swpc_sep"),
+      fetchMetric("llm_calls_per_min"), fetchMetric("gpu_vram_pct"),
+      fetchMetric("audit_actions_per_min"), fetchMetric("cots_anomaly_count"),
+    ]);
+    const [fg, fy, fr, fb, fu] = await Promise.all([
+      fetchMetric("fleet_green"), fetchMetric("fleet_yellow"),
+      fetchMetric("fleet_red"), fetchMetric("fleet_black"), fetchMetric("fleet_unknown"),
+    ]);
+    drawSparkline("neo-chart-kp", kp, { stroke: "#7dd3fc", fill: "rgba(125,211,252,0.18)", minY: 0, maxY: 9 });
+    drawSparkline("neo-chart-xray", xray, { stroke: "#fbbf24", fill: "rgba(251,191,36,0.18)", log: true });
+    drawSparkline("neo-chart-sep", sep, { stroke: "#f87171", fill: "rgba(248,113,113,0.18)", minY: 0 });
+    drawSparkline("neo-chart-llm-rate", llmRate, { stroke: "#34d399", fill: "rgba(52,211,153,0.18)", minY: 0 });
+    drawSparkline("neo-chart-vram", vram, { stroke: "#a78bfa", fill: "rgba(167,139,250,0.18)", minY: 0, maxY: 100 });
+    drawSparkline("neo-chart-audit-rate", auditRate, { stroke: "#fb923c", fill: "rgba(251,146,60,0.18)", minY: 0 });
+    drawSparkline("neo-chart-cots", cots, { stroke: "#f59e0b", fill: "rgba(245,158,11,0.18)", minY: 0 });
+    drawStackedFleet("neo-chart-fleet", { fleet_green: fg, fleet_yellow: fy, fleet_red: fr, fleet_black: fb, fleet_unknown: fu });
+    // Meta labels
+    const last = (a) => a.length ? a[a.length - 1].v : null;
+    function setText(id, v, unit = "") {
+      const el = document.getElementById(id);
+      if (el && v !== null) el.textContent = `${v.toFixed(2)} ${unit}`;
+    }
+    setText("neo-kp-meta",    last(kp), "Kp");
+    if (last(xray) !== null) document.getElementById("neo-xray-meta").textContent = last(xray).toExponential(2) + " W/m²";
+    setText("neo-sep-meta",   last(sep), "pfu");
+    setText("neo-llm-meta",   last(llmRate), "calls/min");
+    setText("neo-vram-meta",  last(vram), "%");
+    setText("neo-audit-meta", last(auditRate), "/min");
+    setText("neo-cots-meta",  last(cots), "anomalous");
+    const fleet = (last(fg) || 0) + (last(fy) || 0) + (last(fr) || 0) + (last(fb) || 0) + (last(fu) || 0);
+    const fleetEl = document.getElementById("neo-fleet-meta");
+    if (fleetEl) fleetEl.textContent = `${fleet} sats`;
+  }
+  setInterval(refreshNeoCharts, 10_000);
+
+  // ---------------------------------------------------------------- Developer tab refresh
+  async function refreshNeoDevView() {
+    try {
+      const prov = await fetch("/api/neo/provenance").then(r => r.json());
+      const provEl = $("neo-dev-provenance");
+      if (provEl) provEl.textContent = JSON.stringify(prov, null, 2);
+    } catch (e) { /* ignore */ }
+    try {
+      const tests = await fetch("/api/neo/test-status").then(r => r.json());
+      const testEl = $("neo-dev-tests");
+      if (testEl) testEl.textContent =
+        `summary:      ${tests.summary}\n` +
+        `passed:       ${tests.passed}\n` +
+        `failed:       ${tests.failed}\n` +
+        `errors:       ${tests.errors}\n` +
+        `duration_s:   ${tests.duration_s}\n` +
+        `last_run_ts:  ${new Date(tests.last_run_ts * 1000).toISOString()}\n`;
+    } catch (e) { /* ignore */ }
+    try {
+      const rows = await fetch("/api/audit/last20").then(r => r.json());
+      const auditEl = $("neo-dev-audit");
+      if (auditEl) auditEl.textContent = rows.map(r =>
+        `${r.ts || "?"}  ${r.severity || "INFO"}  ${(r.who || "").slice(0,28).padEnd(28)}  ${r.action || ""}  ${(r.msg || "").slice(0, 100)}`
+      ).join("\n") || "(no audit rows yet)";
+    } catch (e) { /* ignore */ }
+  }
+  setInterval(() => {
+    if (document.getElementById("neo-developer-view")?.style.display !== "none") refreshNeoDevView();
+  }, 5_000);
+
   function escapeHtml(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
