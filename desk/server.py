@@ -74,6 +74,8 @@ from desk.physics import (
     TelemetryStream, propagate as sgp4_propagate, telemetry_buffer_for,
     refresh_tle_cache, swpc_fetch_all, swpc_latest_snapshot,
     swpc_is_real_data_available,
+    swpc_combined_forecast,
+    disaster_fetch_combined,
 )
 from desk.detect import detect as jpl_detect
 
@@ -89,6 +91,8 @@ from desk.decisions import (
     llm_justify_beam_redirect,
     get_tactical_brief,
     refresh_tactical_brief,
+    rank_fleet_by_risk,
+    fleet_risk_summary,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -2532,6 +2536,31 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/neo/storage-audit":
             from desk.admin.storage_audit import storage_audit
             self._send_json(storage_audit()); return
+        if path == "/api/neo/at-risk":
+            top_n = 25
+            if "?" in self.path:
+                for pair in self.path.split("?", 1)[1].split("&"):
+                    if pair.startswith("n="):
+                        try: top_n = max(1, min(int(pair.split("=", 1)[1]), 200))
+                        except ValueError: pass
+            ranked = rank_fleet_by_risk(
+                sats=SATS, weather=WEATHER.snapshot(),
+                orbit_lookup=lambda sid: sgp4_propagate(sid, ts_utc=time.time()),
+                cots_lookup=lambda sid: COTS_LATEST.get(sid),
+                top_n=top_n,
+            )
+            summary = fleet_risk_summary(
+                sats=SATS, weather=WEATHER.snapshot(),
+                orbit_lookup=lambda sid: sgp4_propagate(sid, ts_utc=time.time()),
+                cots_lookup=lambda sid: COTS_LATEST.get(sid),
+            )
+            self._send_json({"top": ranked, "summary": summary,
+                             "ts": time.time()}); return
+        if path == "/api/neo/space-weather-forecast":
+            self._send_json(swpc_combined_forecast()); return
+        if path == "/api/neo/where-needs-starlink":
+            d = disaster_fetch_combined()
+            self._send_json(d.get("value") or {"events": [], "errors": d.get("error")}); return
         if path == "/api/neo/wiki/stats":
             from desk.knowledge.wiki_rag import wiki_stats
             self._send_json(wiki_stats()); return

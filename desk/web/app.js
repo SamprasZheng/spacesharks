@@ -670,8 +670,9 @@
   refreshNeoTestStatus(); setInterval(refreshNeoTestStatus, 30_000);
 
   // ---------------------------------------------------------------- NEO workspaces
-  // Tabs: Operations / Analysis / Developer (Slingshot-style).
+  // Tabs: World View / Operations / Fleet (Analysis) / Developer.
   const NEO_VIEWS = {
+    worldview:  $("neo-worldview-view"),
     operations: $("neo-operations-view"),
     analysis:   $("neo-analysis-view"),
     developer:  $("neo-developer-view"),
@@ -686,14 +687,238 @@
       btn.style.borderBottom = active ? "2px solid #38bdf8" : "2px solid transparent";
       btn.classList.toggle("neo-tab-active", active);
     });
+    if (name === "worldview")  refreshNeoWorldView();
     if (name === "operations") refreshNeoCharts();
     if (name === "developer")  refreshNeoDevView();
+    if (name === "analysis")   refreshFleetRiskSummary();
   }
   document.querySelectorAll(".neo-tab").forEach(btn =>
     btn.addEventListener("click", () => setNeoView(btn.dataset.view))
   );
-  // Default tab — start on Operations so user sees the time-series charts first
-  setNeoView("operations");
+  // Default tab — start on World View (answers the three operator questions
+  // directly: at-risk sats / space weather / where needs Starlink)
+  setNeoView("worldview");
+
+  // ---------------------------------------------------------------- WORLD VIEW renderer
+  const BAND_COLORS = {
+    GREEN: "#3df0c8", YELLOW: "#ffd166", RED: "#ff6470", BLACK: "#475569",
+  };
+
+  async function refreshNeoWorldView() {
+    // 1) At-Risk Queue
+    try {
+      const r = await fetch("/api/neo/at-risk?n=20").then(r => r.json());
+      const summary = r.summary || {bands: {}, total: 0};
+      const sumEl = document.getElementById("neo-risk-summary");
+      if (sumEl) sumEl.textContent = `${r.top?.length || 0} shown / ${summary.total || 0} sats`;
+      const bandsEl = document.getElementById("neo-risk-bands");
+      if (bandsEl) {
+        bandsEl.innerHTML = "";
+        for (const band of ["BLACK", "RED", "YELLOW", "GREEN"]) {
+          const n = summary.bands?.[band] || 0;
+          if (n === 0 && band !== "RED") continue;
+          const pill = document.createElement("div");
+          pill.style.cssText = `padding:3px 8px;border-radius:3px;background:${BAND_COLORS[band]}20;color:${BAND_COLORS[band]};border:1px solid ${BAND_COLORS[band]}55`;
+          pill.innerHTML = `<b>${band}</b> ${n}`;
+          bandsEl.appendChild(pill);
+        }
+      }
+      const listEl = document.getElementById("neo-risk-list");
+      if (listEl) {
+        listEl.innerHTML = "";
+        for (const sat of (r.top || [])) {
+          const row = document.createElement("div");
+          const col = BAND_COLORS[sat.band] || "#cbd5e1";
+          const driverPills = (sat.drivers || []).filter(d => d.name !== "NOMINAL").slice(0, 4).map(d =>
+            `<span style="display:inline-block;padding:1px 5px;margin:1px;border-radius:2px;background:${col}15;color:${col};font-size:9px">${d.name}</span>`
+          ).join("");
+          row.style.cssText = `padding:6px 8px;background:#020a14;border-left:3px solid ${col};border-radius:0 3px 3px 0;font-size:10px;cursor:pointer`;
+          row.innerHTML =
+            `<div style="display:flex;justify-content:space-between"><b style="color:${col}">${sat.band}</b><span>${sat.total_score.toFixed(1)}</span></div>
+             <div style="color:#cbd5e1;margin:2px 0"><b>${sat.sat_name}</b> · ${sat.regime} · health=${sat.health_label}</div>
+             <div style="color:#94a3b8;font-size:9px">${sat.summary}</div>
+             <div>${driverPills}</div>`;
+          row.addEventListener("click", () => {
+            fetch("/api/focus", {method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({sat: sat.sat_id})});
+          });
+          listEl.appendChild(row);
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    // 2) Space Weather Forecast
+    try {
+      const r = await fetch("/api/neo/space-weather-forecast").then(r => r.json());
+      const f = r.forecast || {};
+      const issuedEl = document.getElementById("neo-wx-issued");
+      if (issuedEl) issuedEl.textContent = f.issued_at ? `issued ${f.issued_at}` : "(no forecast yet)";
+      const ratEl = document.getElementById("neo-wx-rationale");
+      if (ratEl) ratEl.textContent = f.rationale || "(no rationale in this product)";
+      const tblEl = document.getElementById("neo-wx-kp-table");
+      if (tblEl) {
+        const rows = f.geomagnetic_kp_table || [];
+        if (rows.length === 0) {
+          tblEl.innerHTML = `<div style="color:#475569;padding:4px 0">(NOAA Kp table parse skipped — see rationale above for the 3-day text summary)</div>`;
+        } else {
+          let html = `<div style="display:grid;grid-template-columns:80px 1fr 1fr 1fr;gap:4px;color:#64748b;border-bottom:1px solid #1e3a52;padding-bottom:2px">
+            <div>UT slot</div><div>D+1</div><div>D+2</div><div>D+3</div></div>`;
+          for (const row of rows) {
+            const max = Math.max(row.day1, row.day2, row.day3);
+            const cls = (v) => v >= 5 ? "#ff6470" : v >= 4 ? "#ffd166" : "#3df0c8";
+            html += `<div style="display:grid;grid-template-columns:80px 1fr 1fr 1fr;gap:4px;padding:2px 0">
+              <div style="color:#94a3b8">${row.slot}</div>
+              <div style="color:${cls(row.day1)}">${row.day1.toFixed(2)}</div>
+              <div style="color:${cls(row.day2)}">${row.day2.toFixed(2)}</div>
+              <div style="color:${cls(row.day3)}">${row.day3.toFixed(2)}</div>
+            </div>`;
+          }
+          tblEl.innerHTML = html;
+        }
+      }
+      const alertsEl = document.getElementById("neo-wx-alerts");
+      if (alertsEl) {
+        const alerts = r.alerts || [];
+        alertsEl.innerHTML = alerts.slice(0, 10).map(a =>
+          `<div style="padding:4px 6px;background:#020a14;border-left:2px solid #fbbf24;margin:2px 0;border-radius:0 3px 3px 0">
+             <div style="color:#fbbf24;font-weight:600">[${a.product_id || "?"}] ${(a.headline || "").slice(0, 96)}</div>
+             <div style="color:#64748b;font-size:9px">${a.issue_datetime || ""}</div>
+           </div>`
+        ).join("") || `<div style="color:#475569;padding:4px 0">(no active alerts)</div>`;
+      }
+    } catch (e) { /* ignore */ }
+
+    // 3) Where Needs Starlink — disaster map + list
+    try {
+      const r = await fetch("/api/neo/where-needs-starlink").then(r => r.json());
+      const events = r.events || [];
+      const countEl = document.getElementById("neo-disaster-count");
+      if (countEl) countEl.textContent = `${events.length} events`;
+      drawDisasterMap("neo-disaster-map", events);
+      const listEl = document.getElementById("neo-disaster-list");
+      if (listEl) {
+        listEl.innerHTML = events.slice(0, 30).map(ev => {
+          const sevCol = ev.severity_score >= 70 ? "#ff6470" : ev.severity_score >= 50 ? "#ffd166" : "#3df0c8";
+          return `<div style="padding:4px 6px;background:#020a14;border-left:2px solid ${sevCol};border-radius:0 3px 3px 0">
+            <div style="color:${sevCol};font-weight:600">${ev.source} · ${ev.headline}</div>
+            <div style="color:#64748b;font-size:9px">(${ev.lat.toFixed(2)}, ${ev.lon.toFixed(2)}) · sev=${ev.severity_score.toFixed(0)} · ${ev.iso_time || ""}</div>
+          </div>`;
+        }).join("") || `<div style="color:#475569;padding:4px 0">(no active disasters in feed)</div>`;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  // Mini equirectangular world map showing disaster markers
+  function drawDisasterMap(svgId, events) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    const W = 360, H = 180;
+
+    // Coarse continent outlines (rough rectangles) — better than nothing as a backdrop
+    const continents = [
+      [-170, 5, -55, 70],   // North America
+      [-90, -55, -35, 12],  // South America
+      [-15, 35, 50, 70],    // Europe
+      [-20, -35, 50, 35],   // Africa
+      [25, 5, 145, 70],     // Asia
+      [110, -45, 155, -10], // Australia
+    ];
+    for (const [lon1, lat1, lon2, lat2] of continents) {
+      const x1 = (lon1 + 180) * (W / 360);
+      const y1 = (90 - lat2) * (H / 180);
+      const x2 = (lon2 + 180) * (W / 360);
+      const y2 = (90 - lat1) * (H / 180);
+      const r = document.createElementNS(svgNS, "rect");
+      r.setAttribute("x", x1); r.setAttribute("y", y1);
+      r.setAttribute("width", Math.max(1, x2 - x1)); r.setAttribute("height", Math.max(1, y2 - y1));
+      r.setAttribute("fill", "#0a2436"); r.setAttribute("stroke", "#1e3a52"); r.setAttribute("stroke-width", "0.3");
+      svg.appendChild(r);
+    }
+
+    // Lat/lon grid lines (every 30°)
+    for (let lon = -180; lon <= 180; lon += 60) {
+      const x = (lon + 180) * (W / 360);
+      const ln = document.createElementNS(svgNS, "line");
+      ln.setAttribute("x1", x); ln.setAttribute("x2", x);
+      ln.setAttribute("y1", 0); ln.setAttribute("y2", H);
+      ln.setAttribute("stroke", "#102030"); ln.setAttribute("stroke-width", "0.3");
+      svg.appendChild(ln);
+    }
+    for (let lat = -60; lat <= 60; lat += 30) {
+      const y = (90 - lat) * (H / 180);
+      const ln = document.createElementNS(svgNS, "line");
+      ln.setAttribute("x1", 0); ln.setAttribute("x2", W);
+      ln.setAttribute("y1", y); ln.setAttribute("y2", y);
+      ln.setAttribute("stroke", "#102030"); ln.setAttribute("stroke-width", "0.3");
+      svg.appendChild(ln);
+    }
+
+    // Equator line
+    const eq = document.createElementNS(svgNS, "line");
+    eq.setAttribute("x1", 0); eq.setAttribute("x2", W);
+    eq.setAttribute("y1", H/2); eq.setAttribute("y2", H/2);
+    eq.setAttribute("stroke", "#1e3a52"); eq.setAttribute("stroke-width", "0.6");
+    svg.appendChild(eq);
+
+    // Plot events
+    for (const ev of events) {
+      const x = (ev.lon + 180) * (W / 360);
+      const y = (90 - ev.lat) * (H / 180);
+      const c = document.createElementNS(svgNS, "circle");
+      c.setAttribute("cx", x); c.setAttribute("cy", y);
+      c.setAttribute("r", Math.max(1.5, Math.min(6, ev.severity_score / 12)));
+      const col = ev.severity_score >= 70 ? "#ff6470" :
+                  ev.severity_score >= 50 ? "#ffd166" : "#3df0c8";
+      c.setAttribute("fill", col); c.setAttribute("fill-opacity", "0.65");
+      c.setAttribute("stroke", col); c.setAttribute("stroke-width", "0.6");
+      const tt = document.createElementNS(svgNS, "title");
+      tt.textContent = `${ev.headline} (sev=${ev.severity_score.toFixed(0)})`;
+      c.appendChild(tt);
+      svg.appendChild(c);
+    }
+  }
+  setInterval(() => {
+    if (document.getElementById("neo-worldview-view")?.style.display !== "none") refreshNeoWorldView();
+  }, 30_000);
+
+  // Fleet (Analysis) tab — replaces council with a fleet-risk summary.
+  async function refreshFleetRiskSummary() {
+    try {
+      const r = await fetch("/api/neo/at-risk?n=3").then(r => r.json());
+      const summary = r.summary || {bands: {}, total: 0};
+      const bar = document.getElementById("fleet-risk-band-bar");
+      if (bar) {
+        bar.innerHTML = "";
+        const total = summary.total || 1;
+        for (const band of ["BLACK", "RED", "YELLOW", "GREEN"]) {
+          const n = summary.bands?.[band] || 0;
+          const col = BAND_COLORS[band] || "#cbd5e1";
+          const pct = (100 * n / total).toFixed(0);
+          const cell = document.createElement("div");
+          cell.style.cssText = `flex:1;padding:8px;background:${col}15;border:1px solid ${col}55;border-radius:4px`;
+          cell.innerHTML = `<div style="color:${col};font-size:10px;letter-spacing:0.12em;font-weight:600">${band}</div>
+            <div style="color:${col};font-size:22px;font-weight:700">${n}</div>
+            <div style="color:#64748b;font-size:10px">${pct}% of ${total}</div>`;
+          bar.appendChild(cell);
+        }
+      }
+      const top3 = document.getElementById("fleet-risk-top3");
+      if (top3) {
+        const rows = (r.top || []).slice(0, 3);
+        top3.innerHTML = rows.length === 0 ? "" :
+          `<div style="color:#7dd3fc;font-size:10px;letter-spacing:0.12em;margin-bottom:6px">TOP 3 AT-RISK</div>` +
+          rows.map(s => {
+            const col = BAND_COLORS[s.band] || "#cbd5e1";
+            return `<div style="padding:4px 8px;background:#020a14;border-left:2px solid ${col};margin:2px 0;border-radius:0 3px 3px 0">
+              <span style="color:${col};font-weight:600">${s.band}</span> · <b>${s.sat_name}</b> · score ${s.total_score.toFixed(1)} · ${s.summary}
+            </div>`;
+          }).join("");
+      }
+    } catch (e) { /* ignore */ }
+  }
+  setInterval(() => {
+    if (document.getElementById("neo-analysis-view")?.style.display !== "none") refreshFleetRiskSummary();
+  }, 30_000);
 
   // ---------------------------------------------------------------- $0 cloud badge
   async function refreshCloudBadge() {

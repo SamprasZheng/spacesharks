@@ -21,6 +21,11 @@ from desk.decisions.tactical_brief import (
     get_tactical_brief,
     refresh_tactical_brief,
 )
+from desk.decisions.at_risk_ranking import (
+    rank_fleet_by_risk,
+    fleet_risk_summary,
+    compute_sat_risk,
+)
 
 __all__ = [
     "BeamRedirectDraft",
@@ -32,4 +37,7 @@ __all__ = [
     "llm_justify_beam_redirect",
     "get_tactical_brief",
     "refresh_tactical_brief",
+    "rank_fleet_by_risk",
+    "fleet_risk_summary",
+    "compute_sat_risk",
 ]

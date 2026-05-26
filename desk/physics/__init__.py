@@ -13,6 +13,12 @@ from desk.physics.swpc_poller import (
     latest_snapshot as swpc_latest_snapshot,
     is_real_data_available as swpc_is_real_data_available,
 )
+from desk.physics.swpc_forecast import (
+    fetch_3day_forecast as swpc_fetch_3day_forecast,
+    fetch_active_alerts as swpc_fetch_active_alerts,
+    combined_forecast_snapshot as swpc_combined_forecast,
+)
+from desk.physics.disaster_feed import fetch_combined as disaster_fetch_combined
 
 __all__ = [
     "propagate",
@@ -23,4 +29,8 @@ __all__ = [
     "swpc_fetch_all",
     "swpc_latest_snapshot",
     "swpc_is_real_data_available",
+    "swpc_fetch_3day_forecast",
+    "swpc_fetch_active_alerts",
+    "swpc_combined_forecast",
+    "disaster_fetch_combined",
 ]
