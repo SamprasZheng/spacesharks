@@ -41,6 +41,15 @@ data/snapshots/
 desk/data/*.jsonl
 desk/data/evidence-blobs/
 
+# NEO Action Item 4 — live NemoClaw audit logs (regenerated at runtime)
+data/audit/*.jsonl
+data/audit/offline-batches/*.jsonl
+desk/data/audit/*.jsonl
+desk/data/audit/offline-batches/*.jsonl
+# NEO Action Item 2 — Celestrak TLE cache (regenerated daily)
+data/tle/*.tle
+desk/data/tle/*.tle
+
 # Logs
 *.log
 logs/

@@ -43,6 +43,23 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# Make `desk` importable when running as a script (`python server.py`).
+_PARENT = Path(__file__).resolve().parent.parent
+if str(_PARENT) not in sys.path:
+    sys.path.insert(0, str(_PARENT))
+
+# NEO Action Item 4 — NemoClaw audit + guardrail module. See
+# docs/research/agentic-provenance.md for the four-layer schema this writes into,
+# and INVARIANTS.md §"Fail-closed invariants" for the operational rules.
+from desk.nemoclaw import (
+    audit_dispatch,
+    audit_tail,
+    input_guard,
+    output_guard,
+    policy_preset_hash as _nemoclaw_policy_hash,
+    policy_egress_allowlist as _nemoclaw_egress_allowlist,
+)
+
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 DATA = ROOT / "data"
@@ -409,22 +426,31 @@ COUNCIL_SEATS = [
      "prompt": "Assess mission-impact severity — comms/nav/EO consequence if this sat degrades."},
 ]
 
-# Model assignments — Nemotron stays out of the specialist pool because it is
-# the fixed Mission Director. Specialists are the 5 non-NVIDIA primaries plus
-# one backup if any seat is unfillable.
+# Model assignments — NEO Action Item 4 lineup swap (review2.md §1+§4 critique).
+#
+# Specialists are now heavily Nemotron-tilted to satisfy the NVIDIA Agent Hackathon
+# Airtable form's "core reasoning model = Nemotron" scoring criterion. INVARIANTS.md
+# §"Specialist-arbiter rule" requires three different base-model families across
+# the active council — satisfied by Nemotron (NVIDIA) + Hermes-4 (Nous Research) +
+# Qwen-3 (Alibaba). The RADIATION seat is intentionally same-family-as-ORBIT
+# (both Nemotron-Nano) and the council resolver flags this as `degraded: same-family`
+# whenever both seats are active simultaneously (FULL council mode).
+#
+# MISSION_DIRECTOR escalates to Nemotron-Super 49B for tier-3 cloud calls per
+# INVARIANTS.md §"Tiered-inference cascade".
 PRIMARY_MODELS = [
-    _mk_model("llama3.2:3b",     "Meta",       "Llama-3.2",    "PRIMARY", 2.0, seat="ORBIT"),
-    _mk_model("qwen3:4b",        "Alibaba",    "Qwen-3",       "PRIMARY", 2.5, seat="TRIAGE"),
-    _mk_model("phi3.5",          "Microsoft",  "Phi-3.5-mini", "PRIMARY", 2.3, seat="EVIDENCE"),
-    _mk_model("gemma2:2b",       "Google",     "Gemma-2",      "PRIMARY", 1.6, seat="RADIATION"),
-    _mk_model("mistral:7b",      "Mistral AI", "Mistral-7B",   "PRIMARY", 4.1, seat="IMPACT"),
+    _mk_model("nemotron-3-nano:4b",   "NVIDIA",        "Nemotron-3-Nano",  "PRIMARY", 2.8, seat="ORBIT"),
+    _mk_model("hermes-4:14b",         "Nous Research", "Hermes-4",         "PRIMARY", 7.5, seat="TRIAGE"),
+    _mk_model("qwen3:4b",             "Alibaba",       "Qwen-3",           "PRIMARY", 2.5, seat="EVIDENCE"),
+    _mk_model("nemotron-3-nano:4b",   "NVIDIA",        "Nemotron-3-Nano",  "PRIMARY", 2.8, seat="RADIATION"),
+    _mk_model("nemotron-3-super:49b", "NVIDIA",        "Nemotron-3-Super", "PRIMARY", 26.0, seat="IMPACT"),
 ]
 BACKUP_MODELS = [
-    _mk_model("deepseek-r1:7b",     "DeepSeek",   "DeepSeek-R1", "BACKUP",  4.7),
-    _mk_model("granite3-dense:2b",  "IBM",        "Granite-3",   "BACKUP",  1.5),
-    _mk_model("qwen2.5:7b",         "Alibaba",    "Qwen-2.5",    "BACKUP",  4.7),
+    _mk_model("nemotron-3-nano:9b",   "NVIDIA",        "Nemotron-3-Nano",  "BACKUP",  5.2),
+    _mk_model("mistral:7b",           "Mistral AI",    "Mistral-7B",       "BACKUP",  4.1),
+    _mk_model("llama3.2:3b",          "Meta",          "Llama-3.2",        "BACKUP",  2.0),
 ]
-MISSION_DIRECTOR = _mk_model("nemotron-3-nano:4b", "NVIDIA", "Nemotron-3", "DIRECTOR", 2.8)
+MISSION_DIRECTOR = _mk_model("nemotron-3-super:49b", "NVIDIA", "Nemotron-3-Super", "DIRECTOR", 26.0)
 MISSION_DIRECTOR["seat"] = "DIRECTOR"
 
 CONSECUTIVE_FAIL_THRESHOLD = 3
@@ -640,18 +666,91 @@ def _seat_prompt(seat: str, sat: dict, wx: dict) -> str:
     return _sat_context(sat, wx) + "\n\nROLE: " + (role["title"] if role else seat) + "\n" + role_question
 
 
-def _gpu_pressure_ok() -> tuple[bool, float | None]:
-    """Pre-flight check before each Ollama call. Returns (ok_to_call, pct_used).
-    Honours GPU_BLOCK_PCT — if VRAM is above that, defer this call.
+def _gpu_pressure_check() -> tuple[str, float | None]:
+    """NEO Action Item 4 — pressure tier classifier (does not act).
+
+    Returns one of:
+      "OK"       — pct < GPU_WARN_PCT  (default 80%)
+      "WARM"     — GPU_WARN_PCT  <= pct < (GPU_WARN_PCT + 6)
+      "HOT"      — (GPU_WARN_PCT + 6) <= pct < GPU_BLOCK_PCT
+      "CRITICAL" — pct >= GPU_BLOCK_PCT
+      "UNKNOWN"  — no GPU stats available (fail-open by design — never block
+                   inference because we cannot measure pressure)
+
+    Use `_gpu_pressure_react(tier)` to apply the degradation step.
     """
     gpu = INFERENCE.get("host_gpu") or host_gpu_snapshot()
     INFERENCE["host_gpu"] = gpu
     if not gpu or not gpu.get("mem_total_mib"):
-        return True, None
+        return "UNKNOWN", None
     pct = 100.0 * gpu["mem_used_mib"] / gpu["mem_total_mib"]
     if pct >= GPU_BLOCK_PCT:
-        return False, pct
-    return True, pct
+        return "CRITICAL", pct
+    if pct >= GPU_WARN_PCT + 6:
+        return "HOT", pct
+    if pct >= GPU_WARN_PCT:
+        return "WARM", pct
+    return "OK", pct
+
+
+def _gpu_pressure_react(tier: str, pct: float | None) -> dict:
+    """NEO Action Item 4 — graceful-degrade ladder.
+
+    Steps in increasing severity:
+      OK        — no action.
+      WARM      — drop council from FULL → BALANCED (5 → 4 seats), once.
+      HOT       — drop council to ECO (3 seats), force T1→T2 escalation triggers
+                  to be stricter so fewer cloud-bound calls fire concurrently.
+      CRITICAL  — block the current call AND log an offload intent; the host
+                  can opt-in to actually invoke `ollama unload` here.
+
+    Returns the action descriptor written into the audit row.
+    """
+    action: dict = {"tier": tier, "pct": pct, "council_mode_before": INFERENCE.get("council_mode")}
+
+    if tier in ("OK", "UNKNOWN"):
+        action["taken"] = "none"
+        return action
+
+    if tier == "WARM" and INFERENCE.get("council_mode") == "FULL":
+        INFERENCE["council_mode"] = "BALANCED"
+        action["taken"] = "shrink_council:FULL->BALANCED"
+        BUS.copilot("nemoclaw",
+                    f"VRAM {pct:.0f}% (WARM) — shrinking council FULL -> BALANCED to relieve pressure",
+                    severity="MED", action="COUNCIL_SHRINK", **action)
+        return action
+
+    if tier == "HOT":
+        if INFERENCE.get("council_mode") != "ECO":
+            INFERENCE["council_mode"] = "ECO"
+            action["taken"] = "shrink_council:->ECO"
+        else:
+            action["taken"] = "already_eco"
+        BUS.copilot("nemoclaw",
+                    f"VRAM {pct:.0f}% (HOT) — council pinned to ECO; tier-3 escalation throttled",
+                    severity="HIGH", action="COUNCIL_PIN_ECO", **action)
+        return action
+
+    # CRITICAL
+    INFERENCE["vram_gated_count"] += 1
+    action["taken"] = "block_and_offload_intent"
+    BUS.copilot("nemoclaw",
+                f"VRAM {pct:.0f}% (CRITICAL >= {GPU_BLOCK_PCT:.0f}%) — call blocked; offload intent logged",
+                severity="HIGH", action="VRAM_OFFLOAD_INTENT", **action)
+    return action
+
+
+def _gpu_pressure_ok() -> tuple[bool, float | None]:
+    """Back-compat shim — existing call sites still ask `(ok, pct)`. Under the
+    NEO ladder this returns:
+      ok=True   when tier in {OK, WARM, HOT, UNKNOWN}
+      ok=False  when tier == CRITICAL
+    Each WARM/HOT/CRITICAL transition fires the react step (which may already
+    have shrunk the council before this function returns).
+    """
+    tier, pct = _gpu_pressure_check()
+    _gpu_pressure_react(tier, pct)
+    return (tier != "CRITICAL"), pct
 
 
 def _model_ask(model: dict, prompt: str, timeout: float = 15.0,
@@ -1142,9 +1241,39 @@ class Bus:
         }
 
     def copilot(self, who: str, msg: str, **extra) -> None:
-        """Retired — the chat-style copilot stream was replaced by the
-        Mission Inbox + alerts (see docs/RISKS_AND_FIXES.md P0). Kept as a
-        no-op so legacy call sites don't crash."""
+        """NEO Action Item 4 — wired to the NemoClaw audit-dispatch pipeline.
+
+        Closes review2.md's #1 critique (this was a `return None` no-op). Every
+        call now produces a JSONL row under `data/audit/YYYY-MM-DD.jsonl` with
+        audit_log_id + policy_preset_hash, and is mirrored to the in-memory
+        copilot_log deque for the live dashboard.
+
+        `who` is the actor (`"nemoclaw" / "user" / "model:<id>"`).
+        `extra` kwargs land verbatim on the row — keys like `decision_route`,
+        `denied_actions`, `override_invariant`, `severity`, `action`, `sat_id`,
+        `who_label` are all accepted.
+        """
+        # severity defaults to INFO unless the caller supplied one in extra.
+        severity = extra.pop("severity", "INFO")
+        try:
+            row = audit_dispatch(who, msg, severity=severity, **extra)
+        except Exception as e:
+            # NemoClaw audit write failed — degrade visibly rather than silently
+            # so the "no action without audit" invariant is enforced operationally.
+            row = {
+                "audit_log_id": "nemoclaw-write-failed",
+                "ts": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+                "who": who, "msg": msg, "severity": "HIGH",
+                "error": f"audit_dispatch failed: {e}",
+            }
+
+        # In-memory dashboard log — same row but trimmed to 80 entries per
+        # the existing UX convention.
+        self.copilot_log.append(row)
+        if len(self.copilot_log) > self.copilot_log.maxlen:
+            # deque has maxlen; this guard is redundant but keeps intent explicit
+            pass
+        self.publish({"type": "copilot", "row": row})
         return None
 
     def alert(self, severity: str, message: str, sat_id: str | None = None) -> None:
@@ -1649,6 +1778,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":          self._send_json(BUS.snapshot()); return
         if path == "/api/catalog":        self._send_json({"catalog": VISUAL_CATALOG, "size": len(VISUAL_CATALOG)}); return
         if path == "/api/stream":         self._serve_sse(); return
+        if path == "/api/audit/last10":   self._send_json(audit_tail(10)); return
+        if path.startswith("/api/audit/last"):
+            try:
+                n = int(path.rsplit("last", 1)[1])
+            except (ValueError, IndexError):
+                n = 10
+            self._send_json(audit_tail(max(1, min(n, 200)))); return
+        if path == "/api/audit/policy-hash":
+            self._send_json({"policy_preset_hash": _nemoclaw_policy_hash()}); return
         self.send_error(404)
 
     def _serve_sse(self) -> None:
