@@ -86,6 +86,9 @@ from desk.decisions import (
     BEAM_REDIRECT_TOOL_SCHEMA,
     kb_lookup,
     kb_load,
+    llm_justify_beam_redirect,
+    get_tactical_brief,
+    refresh_tactical_brief,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -1743,6 +1746,36 @@ def _maybe_draft_beam_redirect(sat: dict, regime: str, magnitude: float) -> dict
                          f"emergency surrogate.",
     )
 
+    # NEO post-2026-05-26 — upgrade justification from template to real
+    # Nemotron call. Every dashboard cell must be backed by a real LLM call
+    # or judge per owner critique. On Ollama unreachable, falls back to the
+    # original template so the dashboard never blanks.
+    kb_entries = kb_lookup(failure_mode=regime, regime="LEO", limit=3)
+    llm_result = llm_justify_beam_redirect(
+        sat_id=draft.sat_id,
+        anomaly_regime=regime,
+        target_lat=draft.target_lat_deg,
+        target_lon=draft.target_lon_deg,
+        tilt_deg=draft.tilt_deg,
+        duration_s=draft.duration_s,
+        incident_summary=f"Sub-satellite-point demo target ({target_lat:.2f}, {target_lon:.2f})",
+        kb_entries=kb_entries,
+        ollama_url=INFERENCE["ollama_url"].rstrip("/") + "/api/chat",
+    )
+    # Splice the LLM text into the draft's justification + record provenance
+    # on the draft dict so the dashboard can show "live Nemotron 2.3s ago".
+    draft.justification = llm_result["text"]
+    draft.evidence_pointers = [e.entry_id for e in kb_entries[:3]]
+    BUS.copilot("model:" + llm_result["model_id"],
+                f"justify beam-redirect for {draft.sat_id} via {llm_result['source']} "
+                f"({llm_result['latency_ms']}ms, {llm_result['eval_count']} tokens)",
+                severity="INFO", action="BEAM_REDIRECT_LLM_JUSTIFY",
+                sat_id=draft.sat_id, llm_source=llm_result["source"],
+                latency_ms=llm_result["latency_ms"],
+                eval_count=llm_result["eval_count"],
+                prompt_hash=llm_result["prompt_hash"],
+                override_invariant="O2-decision-verb-4th")
+
     # Output-guard the justification before publishing — closes review2.md's
     # "NemoClaw is no-op" critique end-to-end on this verb.
     allow, scrubbed, denied = output_guard(draft.justification)
@@ -1755,12 +1788,17 @@ def _maybe_draft_beam_redirect(sat: dict, regime: str, magnitude: float) -> dict
         return None
 
     draft_dict = draft.to_dict()
+    # Attach LLM provenance fields so dashboard can show the badge.
+    draft_dict["llm_source"] = llm_result["source"]
+    draft_dict["llm_latency_ms"] = llm_result["latency_ms"]
+    draft_dict["llm_model_id"] = llm_result["model_id"]
+    draft_dict["llm_eval_count"] = llm_result["eval_count"]
     _BEAM_DRAFT_LAST[sat_id] = now_ts
     BEAM_DRAFTS_QUEUE.insert(0, draft_dict)
     if len(BEAM_DRAFTS_QUEUE) > 50:
         BEAM_DRAFTS_QUEUE.pop()
 
-    BUS.copilot("model:nemotron-3-super:49b",
+    BUS.copilot("model:" + MISSION_DIRECTOR["id"],
                 f"draft beam-redirect for {sat_id} (regime={regime}, "
                 f"tilt={draft.tilt_deg:.1f}°, duration={draft.duration_s}s)",
                 severity="MED", action="BEAM_REDIRECT_DRAFT",
@@ -1951,6 +1989,155 @@ def token_history_loop() -> None:
         last = TOKEN_USAGE["spent"]
         TOKEN_USAGE["history"].append({"t": int(time.time()), "delta": delta, "spent": TOKEN_USAGE["spent"]})
         BUS.publish({"type": "tokens", "tokens": token_view()})
+
+
+def neo_tactical_brief_loop() -> None:
+    """NEO Tactical Brief panel — every 60s ask Nemotron-Nano-4B for a
+    three-sentence executive summary of the current fleet state. The result
+    is exposed at /api/neo/tactical-brief and rendered in the dashboard. Each
+    successful generation writes an audit row.
+    """
+    while True:
+        if INFERENCE["mode"] == "LIVE-OLLAMA":
+            try:
+                fleet_state = {"fleet_health": fleet_health_counts()}
+                weather = WEATHER.snapshot()
+                recent_audit = [r.get("action", "") for r in audit_tail(20) if r.get("action")]
+                result = refresh_tactical_brief(
+                    fleet_state, weather, recent_audit,
+                    ollama_url=INFERENCE["ollama_url"].rstrip("/") + "/api/chat",
+                )
+                if result.get("ok"):
+                    BUS.copilot("model:" + result["model_id"],
+                                f"NEO tactical brief refreshed ({result['latency_ms']}ms, "
+                                f"{result['eval_count']} tokens)",
+                                severity="INFO", action="NEO_TACTICAL_BRIEF",
+                                latency_ms=result["latency_ms"],
+                                eval_count=result["eval_count"],
+                                prompt_hash=result["prompt_hash"])
+            except Exception as e:
+                BUS.copilot("nemoclaw",
+                            f"neo_tactical_brief_loop error: {e}",
+                            severity="MED", action="NEO_BRIEF_ERROR")
+        time.sleep(60)
+
+
+# Lightweight test-status cache populated at boot + every 5 minutes by
+# neo_test_status_loop. Keeps the dashboard cheap — running pytest on every
+# /api/state call would be insane.
+NEO_TEST_STATUS: dict = {
+    "ok": False,
+    "passed": 0, "failed": 0, "errors": 0, "total": 0,
+    "duration_s": 0.0,
+    "last_run_ts": 0,
+    "summary": "(not run yet)",
+}
+
+
+def _run_pytest_collect() -> dict:
+    """Run `pytest --collect-only -q` then `pytest -q --no-header` once to get
+    a passed/failed summary. Subprocess; short timeout so we never wedge."""
+    import subprocess
+    repo = Path(__file__).resolve().parent.parent
+    t0 = time.time()
+    try:
+        cp = subprocess.run(
+            ["python", "-m", "pytest", "-q", "--no-header", "--tb=no"],
+            cwd=str(repo),
+            capture_output=True, text=True, timeout=120,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return {
+            "ok": False, "passed": 0, "failed": 0, "errors": 0, "total": 0,
+            "duration_s": time.time() - t0, "last_run_ts": int(time.time()),
+            "summary": f"pytest failed to launch: {e}",
+        }
+    import re
+    tail = (cp.stdout + "\n" + cp.stderr).strip().split("\n")
+    # pytest -q --no-header output line shapes we accept:
+    #   "44 passed in 0.39s"
+    #   "============= 44 passed in 0.39s ============="
+    #   "============= 1 failed, 43 passed in 0.39s ============="
+    summary_line = ""
+    for ln in reversed(tail):
+        if ("passed" in ln or "failed" in ln or "error" in ln) and ("in " in ln):
+            summary_line = ln.strip("= ").strip()
+            break
+    passed = failed = errors = 0
+    m_p = re.search(r"(\d+) passed", summary_line)
+    m_f = re.search(r"(\d+) failed", summary_line)
+    m_e = re.search(r"(\d+) error", summary_line)
+    if m_p: passed = int(m_p.group(1))
+    if m_f: failed = int(m_f.group(1))
+    if m_e: errors = int(m_e.group(1))
+    return {
+        "ok": (failed == 0 and errors == 0 and passed > 0),
+        "passed": passed, "failed": failed, "errors": errors,
+        "total": passed + failed + errors,
+        "duration_s": round(time.time() - t0, 2),
+        "last_run_ts": int(time.time()),
+        "summary": summary_line or "(no pytest summary)",
+    }
+
+
+def neo_test_status_loop() -> None:
+    """Run pytest once at boot, then every 5 minutes. Result lives in
+    NEO_TEST_STATUS and is exposed via /api/neo/test-status."""
+    global NEO_TEST_STATUS
+    while True:
+        try:
+            NEO_TEST_STATUS = _run_pytest_collect()
+            BUS.copilot("nemoclaw",
+                        f"NEO test status: {NEO_TEST_STATUS['summary']}",
+                        severity="INFO" if NEO_TEST_STATUS["ok"] else "MED",
+                        action="NEO_TEST_STATUS",
+                        passed=NEO_TEST_STATUS["passed"],
+                        failed=NEO_TEST_STATUS["failed"],
+                        duration_s=NEO_TEST_STATUS["duration_s"])
+        except Exception as e:
+            BUS.copilot("nemoclaw",
+                        f"neo_test_status_loop error: {e}",
+                        severity="HIGH", action="NEO_TEST_ERROR")
+        time.sleep(300)
+
+
+def _neo_provenance_view() -> dict:
+    """Lightweight aggregation of what's currently backed by real LLM calls.
+    Surfaces in the dashboard so judges/reviewers see what's real-time-LLM.
+    """
+    wx = WEATHER.snapshot()
+    brief = get_tactical_brief()
+    return {
+        "weather": {
+            "source": wx.get("source"),
+            "real_data_age_s": wx.get("real_data_age_s"),
+            "kp": wx.get("kp"),
+            "xray_class": wx.get("xray_class"),
+            "sep_pfu": wx.get("sep_pfu"),
+        },
+        "llm": {
+            "mode": INFERENCE["mode"],
+            "live_calls": INFERENCE.get("live_calls", 0),
+            "director_calls": INFERENCE.get("director_calls", 0),
+            "vram_gated": INFERENCE.get("vram_gated_count", 0),
+        },
+        "tactical_brief": {
+            "ok": brief.get("ok"),
+            "source": brief.get("source"),
+            "ttl_remaining_s": brief.get("ttl_remaining_s"),
+            "latency_ms": brief.get("latency_ms"),
+            "model_id": brief.get("model_id"),
+        },
+        "kb": {
+            "source": kb_load()[1],
+            "count": len(kb_load()[0]),
+        },
+        "policy": {
+            "policy_preset_hash": _nemoclaw_policy_hash(),
+            "egress_allowlist_count": len(_nemoclaw_egress_allowlist()),
+        },
+        "tests": NEO_TEST_STATUS,
+    }
 
 
 def swpc_poll_loop() -> None:
@@ -2200,6 +2387,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/kb/source":
             entries, source = kb_load()
             self._send_json({"source": source, "count": len(entries)}); return
+        # NEO panels — every cell backed by real Nemotron call
+        if path == "/api/neo/tactical-brief":
+            self._send_json(get_tactical_brief()); return
+        if path == "/api/neo/test-status":
+            self._send_json(NEO_TEST_STATUS); return
+        if path == "/api/neo/provenance":
+            self._send_json(_neo_provenance_view()); return
         self.send_error(404)
 
     def _serve_sse(self) -> None:
@@ -2254,8 +2448,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True}); return
         if self.path == "/api/decisions/beam-redirect/draft":
             # NEO Action Item 3 — manually request a beam-redirect draft on
-            # demand. Used in the demo when an SEE anomaly has already
-            # recovered but the operator wants to draft anyway.
+            # demand. Justification text is generated by a real Nemotron call
+            # via llm_justify_beam_redirect (template fallback on Ollama miss).
             sat_id = str(body.get("sat", ""))
             target_lat = float(body.get("target_lat", 0.0))
             target_lon = float(body.get("target_lon", 0.0))
@@ -2276,10 +2470,38 @@ class Handler(BaseHTTPRequestHandler):
                 incident_summary=body.get("incident_summary",
                                           "operator-initiated draft"),
             )
+            # Replace templated justification with real Nemotron-generated text.
+            kb_entries = kb_lookup(failure_mode=regime, regime="LEO", limit=3)
+            llm_result = llm_justify_beam_redirect(
+                sat_id=draft.sat_id,
+                anomaly_regime=regime,
+                target_lat=draft.target_lat_deg,
+                target_lon=draft.target_lon_deg,
+                tilt_deg=draft.tilt_deg,
+                duration_s=draft.duration_s,
+                incident_summary=body.get("incident_summary", "operator-initiated draft"),
+                kb_entries=kb_entries,
+                ollama_url=INFERENCE["ollama_url"].rstrip("/") + "/api/chat",
+            )
+            draft.justification = llm_result["text"]
+            draft.evidence_pointers = [e.entry_id for e in kb_entries[:3]]
+            BUS.copilot("model:" + llm_result["model_id"],
+                        f"justify beam-redirect for {sat_id} via {llm_result['source']} "
+                        f"({llm_result['latency_ms']}ms, {llm_result['eval_count']} tokens)",
+                        severity="INFO", action="BEAM_REDIRECT_LLM_JUSTIFY",
+                        sat_id=sat_id, llm_source=llm_result["source"],
+                        latency_ms=llm_result["latency_ms"],
+                        eval_count=llm_result["eval_count"],
+                        prompt_hash=llm_result["prompt_hash"],
+                        override_invariant="O2-decision-verb-4th")
             allow, _, denied = output_guard(draft.justification)
             if not allow:
                 self._send_json({"blocked": True, "denied_actions": denied}, status=403); return
             draft_dict = draft.to_dict()
+            # Attach LLM provenance fields so dashboard can show the badge.
+            draft_dict["llm_source"] = llm_result["source"]
+            draft_dict["llm_latency_ms"] = llm_result["latency_ms"]
+            draft_dict["llm_model_id"] = llm_result["model_id"]
             BEAM_DRAFTS_QUEUE.insert(0, draft_dict)
             if len(BEAM_DRAFTS_QUEUE) > 50:
                 BEAM_DRAFTS_QUEUE.pop()
@@ -2395,6 +2617,10 @@ def main() -> None:
     threading.Thread(target=cots_telemetry_loop, daemon=True).start()
     # NEO real-data — NOAA SWPC poller
     threading.Thread(target=swpc_poll_loop, daemon=True).start()
+    # NEO Tactical Brief — real Nemotron-generated executive summary every 60s
+    threading.Thread(target=neo_tactical_brief_loop, daemon=True).start()
+    # NEO test-status — pytest every 5min
+    threading.Thread(target=neo_test_status_loop, daemon=True).start()
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[spacesharks-desk] http://{args.host}:{args.port}/  (writing {JSONL})", flush=True)

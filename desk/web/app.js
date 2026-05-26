@@ -612,6 +612,46 @@
     es.onerror = () => { es.close(); setTimeout(connect, 1500); };
   }
 
+  // ---------------------------------------------------------------- NEO panels
+  // Real Nemotron-generated tactical brief — refreshed every 60s by the
+  // server-side neo_tactical_brief_loop. The dashboard polls every 10s.
+  async function refreshNeoBrief() {
+    try {
+      const r = await fetch("/api/neo/tactical-brief").then(r => r.json());
+      const textEl = document.getElementById("neo-brief-text");
+      const provEl = document.getElementById("neo-brief-prov");
+      const ageEl  = document.getElementById("neo-brief-age");
+      if (!textEl) return;
+      textEl.textContent = r.text || "(no brief)";
+      provEl.textContent = `model: ${r.model_id || "?"} · ${r.latency_ms || 0} ms · ${r.eval_count || 0} tokens · src=${r.source || "?"}`;
+      ageEl.textContent = `ttl ${r.ttl_remaining_s ?? 0}s`;
+      ageEl.style.color = r.source === "llm" ? "#34d399" : (r.source === "llm-failed" ? "#f87171" : "#64748b");
+    } catch (e) { /* server may not be up yet */ }
+  }
+
+  // Test status badge — pytest pass/fail count refreshed every 5 min by the server.
+  async function refreshNeoTestStatus() {
+    try {
+      const r = await fetch("/api/neo/test-status").then(r => r.json());
+      const badge = document.getElementById("neo-test-badge");
+      if (!badge) return;
+      if (r.ok) {
+        badge.textContent = `TESTS ${r.passed} ✓`;
+        badge.style.color = "#34d399";
+      } else if (r.total > 0) {
+        badge.textContent = `TESTS ${r.passed}✓ / ${r.failed + r.errors}✗`;
+        badge.style.color = "#f87171";
+      } else {
+        badge.textContent = "TESTS —";
+        badge.style.color = "#94a3b8";
+      }
+      badge.title = `${r.summary} (${r.duration_s}s)`;
+    } catch (e) { /* ignore */ }
+  }
+
+  refreshNeoBrief(); setInterval(refreshNeoBrief, 10_000);
+  refreshNeoTestStatus(); setInterval(refreshNeoTestStatus, 30_000);
+
   function escapeHtml(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, c =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])

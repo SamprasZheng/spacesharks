@@ -16,6 +16,11 @@ from desk.decisions.beam_redirect import (
     BEAM_REDIRECT_TOOL_SCHEMA,
 )
 from desk.decisions.kb_retrieval import kb_lookup, kb_load, KBEntry
+from desk.decisions.llm_justification import llm_justify_beam_redirect
+from desk.decisions.tactical_brief import (
+    get_tactical_brief,
+    refresh_tactical_brief,
+)
 
 __all__ = [
     "BeamRedirectDraft",
@@ -24,4 +29,7 @@ __all__ = [
     "kb_lookup",
     "kb_load",
     "KBEntry",
+    "llm_justify_beam_redirect",
+    "get_tactical_brief",
+    "refresh_tactical_brief",
 ]
