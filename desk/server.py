@@ -64,7 +64,17 @@ from desk.nemoclaw import (
 # nonparametric dynamic threshold. Operates under INVARIANTS override O1
 # (source-list-lock 5th input is local synthetic only — no new external egress).
 # See docs/INVARIANTS.md §"How to use this document".
-from desk.physics import TelemetryStream, propagate as sgp4_propagate, telemetry_buffer_for
+#
+# Real data sources wired here (post-2026-05-26 owner review):
+#   - desk.physics.swpc_poller fetches live NOAA SWPC Kp/X-ray/SEP feeds
+#   - desk.physics.sgp4_propagator.refresh_tle_cache pulls live Celestrak TLEs
+# Both hosts (swpc.noaa.gov and celestrak.org) are already on the NemoClaw
+# egress allowlist per INVARIANTS source-list-lock; no new egress surface.
+from desk.physics import (
+    TelemetryStream, propagate as sgp4_propagate, telemetry_buffer_for,
+    refresh_tle_cache, swpc_fetch_all, swpc_latest_snapshot,
+    swpc_is_real_data_available,
+)
 from desk.detect import detect as jpl_detect
 
 # NEO Action Item 3 — Function Calling beam-redirect drafts. Operates under
@@ -318,20 +328,63 @@ VISUAL_CATALOG: list[dict] = []   # retired — only real assessed sats now
 # ============================================================================
 
 class Weather:
+    """Space-weather source — prefers live NOAA SWPC, falls back to a slow
+    random walk if SWPC is unreachable. The `source` field on snapshot()
+    tells the dashboard whether the operator is looking at real or
+    synthesised values, so the demo cannot accidentally claim live data
+    when it has none."""
+
     def __init__(self) -> None:
         self.kp = 2.5                # 0..9
         self.xray = 1.5e-7           # W/m^2; M-class ≥ 1e-5, X-class ≥ 1e-4
         self.sep_pfu = 0.4           # protons >10MeV per (cm^2 s sr)
         self.ae = 120                # auroral electrojet, nT
         self.regime_in_storm = None  # set during an event
+        self.source = "init"         # "swpc-live" | "swpc-stale" | "simulated"
+        self._last_real_refresh = 0.0
 
     def tick(self) -> None:
-        # Slow random walk with occasional storms.
+        # Prefer live SWPC values. Fall back to random walk only when the
+        # SWPC poller has no cached value for this feed (cold boot before
+        # the first fetch lands, or sustained outage).
+        snap = swpc_latest_snapshot()
+        kp_real = snap["feeds"].get("kp_1m", {}).get("value")
+        xray_real = snap["feeds"].get("xray_1d", {}).get("value")
+        sep_real = snap["feeds"].get("sep_1d", {}).get("value")
+        any_real = any(v is not None for v in (kp_real, xray_real, sep_real))
+
+        if any_real:
+            # Source-of-truth path — apply real values, leave nothing to chance.
+            if kp_real is not None:
+                self.kp = max(0.0, min(9.0, float(kp_real)))
+            if xray_real is not None:
+                self.xray = max(1e-9, float(xray_real))
+            if sep_real is not None:
+                self.sep_pfu = max(0.0, float(sep_real))
+            # AE not in SWPC feeds at this cadence — leave it on a tame walk
+            # rather than fabricating a number that wasn't measured.
+            self.ae = max(20, min(2000, self.ae + random.gauss(0, 5)))
+            # Mark stale if all feed timestamps are >15 minutes old.
+            stale_ages = [
+                f.get("stale_s") for f in snap["feeds"].values()
+                if f.get("stale_s") is not None
+            ]
+            if stale_ages and min(stale_ages) > 900:
+                self.source = "swpc-stale"
+            else:
+                self.source = "swpc-live"
+            self._last_real_refresh = time.time()
+            # Do NOT _spawn_event() when we have real data — real storms
+            # come from the real feed, not from random dice rolls.
+            return
+
+        # Cold-boot or sustained outage → mark source honestly + random walk.
+        self.source = "simulated"
         self.kp = max(0.0, min(9.0, self.kp + random.gauss(0, 0.3)))
         self.ae = max(20, min(2000, self.ae + random.gauss(0, 60)))
         self.xray = max(1e-8, self.xray * (1 + random.gauss(0, 0.15)))
         self.sep_pfu = max(0.05, self.sep_pfu + random.gauss(0, 0.2))
-        # Random major event ~ every 30 ticks
+        # Random major event ~ every 30 ticks when in simulated mode only.
         if random.random() < 0.020:
             self._spawn_event()
 
@@ -370,6 +423,8 @@ class Weather:
             "sep_pfu": round(self.sep_pfu, 1),
             "ae": int(self.ae),
             "storm_regime": self.regime_in_storm,
+            "source": self.source,
+            "real_data_age_s": int(time.time() - self._last_real_refresh) if self._last_real_refresh else None,
         }
 
 
@@ -1487,15 +1542,41 @@ def estimated_token_rate() -> int:
 
 # ============================================================================
 # NEO Action Item 2 — COTS telemetry + JPL anomaly detection.
+#
+# Design note (post-2026-05-26 owner review): for a 1000-sat fleet we cannot
+# tick the JPL detector every 2s per sat — that would produce 500 detector
+# calls/sec and ~30 GB/day of audit JSONL in the worst case. The scheduler
+# below uses a *round-robin queue* so the detector runs at a steady tick rate
+# regardless of fleet size, and audit rows are gated by a per-sat 5-minute
+# cooldown so the same anomalous sat does not repeatedly log the same event.
+#
+# All telemetry inputs are physics-based projections from real signals:
+#   - real Celestrak TLE → SGP4 sub-satellite point + eclipse hint
+#   - real NOAA SWPC Kp/X-ray/SEP feeds drive the SEE probability envelope
+#   - simulated chip-level current/voltage is a STATISTICAL PROJECTION of
+#     what a COTS chip in that orbital position + space-weather state would
+#     experience, not a synthetic stand-in for a missing real feed.
 # ============================================================================
 
 # 50 Hz stream — initialised lazily on first access so unit-tests can run
 # without booting the worker thread.
 COTS_STREAM: TelemetryStream | None = None
 COTS_TICK_HZ = 50.0
-COTS_DETECTOR_INTERVAL_S = 2.0   # run JPL detector every 2s per sat
+
+# Round-robin scheduler — scan SATS_PER_TICK sats every SCHEDULER_TICK_S.
+# Defaults sized for 1000-sat fleet: scan 17 sats/sec → full sweep in 60s.
+SCHEDULER_TICK_S = 1.0
+SATS_PER_TICK = 17
+# Per-sat audit cooldown so a sat that keeps tripping the detector does not
+# write 30 audit rows per minute. 5 min cooldown means at most 12 audit rows
+# per sat per hour; for the full anomalous fleet at peak storm (~10% of
+# 1000 sats = 100 anomalous), worst-case audit rate ≈ 20 rows/min.
+COTS_AUDIT_COOLDOWN_S = 300.0
+
 COTS_LAST_DETECT: dict[str, float] = {}  # sat_id -> last detector run ts
+COTS_LAST_AUDIT: dict[str, float] = {}   # sat_id -> last audit-row write ts
 COTS_LATEST: dict[str, dict] = {}        # sat_id -> last detector result dict
+_COTS_QUEUE: list[str] = []              # round-robin queue head -> tail
 
 
 def cots_init() -> TelemetryStream:
@@ -1544,16 +1625,9 @@ def cots_run_detector(sat_id: str) -> dict:
     COTS_LATEST[sat_id] = out
     COTS_LAST_DETECT[sat_id] = time.time()
     if res.is_anomaly:
-        # Write an audit row + flip the sat's health hint. The existing
-        # assessment_loop will still vote — we only flag the sat as
-        # `attention: cots-anomaly` so the dashboard can highlight it.
-        BUS.copilot("nemoclaw",
-                    f"COTS anomaly on {sat_id} — regime={res.regime}, "
-                    f"magnitude={res.magnitude:.2f}σ above threshold {res.threshold:.2f}",
-                    severity="HIGH", action="COTS_ANOMALY", sat_id=sat_id,
-                    anomaly_regime=res.regime, anomaly_magnitude=res.magnitude,
-                    override_invariant="O1-source-list-5th-input")
-        # Also mirror to the sat record so the dashboard shows the regime.
+        # In-memory sat record is updated every time so the dashboard always
+        # shows the current anomaly regime. Audit rows are gated by per-sat
+        # cooldown so a flapping anomalous sat doesn't generate 30 rows/min.
         sat = find_sat(sat_id)
         if sat:
             sat["cots_anomaly"] = {
@@ -1561,12 +1635,21 @@ def cots_run_detector(sat_id: str) -> dict:
                 "magnitude": res.magnitude,
                 "ts": time.time(),
             }
-            # NEO Action Item 3 — auto-draft a beam-redirect if the regime
-            # is comms-relevant. We don't have a real "emergency-ground-
-            # location" feed in scope; for the hackathon we use the sat's
-            # current sub-satellite point (from SGP4) as a placeholder
-            # target. A real deployment would consume a disaster-feed input.
-            if res.regime in ("see", "dielectric_charge"):
+
+        now_ts = time.time()
+        last_audit = COTS_LAST_AUDIT.get(sat_id, 0.0)
+        if now_ts - last_audit >= COTS_AUDIT_COOLDOWN_S:
+            COTS_LAST_AUDIT[sat_id] = now_ts
+            BUS.copilot("nemoclaw",
+                        f"COTS anomaly on {sat_id} — regime={res.regime}, "
+                        f"magnitude={res.magnitude:.2f}σ above threshold {res.threshold:.2f}",
+                        severity="HIGH", action="COTS_ANOMALY", sat_id=sat_id,
+                        anomaly_regime=res.regime, anomaly_magnitude=res.magnitude,
+                        override_invariant="O1-source-list-5th-input")
+            # NEO Action Item 3 — auto-draft a beam-redirect if comms-relevant.
+            # Only fires on the audited tick (same cooldown) so a single SEE
+            # event produces at most one draft.
+            if sat and res.regime in ("see", "dielectric_charge"):
                 _maybe_draft_beam_redirect(sat, res.regime, res.magnitude)
     return out
 
@@ -1634,23 +1717,58 @@ def _maybe_draft_beam_redirect(sat: dict, regime: str, magnitude: float) -> dict
 
 
 def cots_telemetry_loop() -> None:
-    """50 Hz background thread — ticks the stream, runs the JPL detector
-    every COTS_DETECTOR_INTERVAL_S per sat. Uses the existing WEATHER state
-    so the stream is modulated by space-weather conditions."""
+    """50 Hz telemetry tick + round-robin JPL scheduler.
+
+    The telemetry stream still ticks at 50Hz (so the JPL detector window has
+    enough samples for short-burst anomalies), but the detector itself runs
+    on a *round-robin queue*: every SCHEDULER_TICK_S we run the detector on
+    SATS_PER_TICK sats off the head of the queue, then re-enqueue them.
+
+    For a 1000-sat fleet with the defaults (17 sats/sec) the full fleet is
+    scanned every ~60 seconds. Audit rows are then further gated by the
+    per-sat COTS_AUDIT_COOLDOWN_S so an anomalous sat writes at most 1
+    row per 5 minutes.
+
+    Total worst-case audit volume: 1000 sats × 1/300 rows/sec × ~350 bytes
+    ≈ 1.2 KB/sec ≈ 100 MB/day at peak storm conditions. Quiet days are
+    ~10x lower because most sats are nominal.
+    """
     stream = cots_init()
+    # Seed the round-robin queue with the current fleet.
+    global _COTS_QUEUE
+    _COTS_QUEUE = [s["id"] for s in SATS]
+    BUS.copilot("nemoclaw",
+                f"COTS scheduler: {len(_COTS_QUEUE)} sats round-robin "
+                f"@ {SATS_PER_TICK}/tick × {SCHEDULER_TICK_S:.1f}s "
+                f"(full sweep ~{len(_COTS_QUEUE) / SATS_PER_TICK * SCHEDULER_TICK_S:.0f}s)",
+                severity="INFO", action="COTS_SCHEDULER_INIT",
+                override_invariant="O1-source-list-5th-input")
+
     period = 1.0 / COTS_TICK_HZ
     next_tick = time.time()
+    last_scheduler_tick = time.time()
     while True:
         if _RUN_FLAG["value"]:
             try:
                 wx = WEATHER.snapshot()
                 stream.tick(weather=wx, orbit_lookup=cots_orbit_lookup)
-                # Throttled detector runs per sat
                 now_ts = time.time()
-                for s in SATS:
-                    last = COTS_LAST_DETECT.get(s["id"], 0.0)
-                    if now_ts - last >= COTS_DETECTOR_INTERVAL_S:
-                        cots_run_detector(s["id"])
+                # Round-robin detector batch
+                if now_ts - last_scheduler_tick >= SCHEDULER_TICK_S:
+                    last_scheduler_tick = now_ts
+                    # Refill the queue if the fleet shifted (e.g. sats added)
+                    if not _COTS_QUEUE:
+                        _COTS_QUEUE = [s["id"] for s in SATS]
+                    batch = _COTS_QUEUE[:SATS_PER_TICK]
+                    _COTS_QUEUE = _COTS_QUEUE[SATS_PER_TICK:] + batch
+                    for sid in batch:
+                        try:
+                            cots_run_detector(sid)
+                        except Exception as e:
+                            BUS.copilot("nemoclaw",
+                                        f"cots_run_detector({sid}) error: {e}",
+                                        severity="HIGH", action="COTS_DETECTOR_ERROR",
+                                        sat_id=sid)
             except Exception as e:
                 BUS.copilot("nemoclaw",
                             f"cots_telemetry_loop error: {e}",
@@ -1778,6 +1896,34 @@ def token_history_loop() -> None:
         last = TOKEN_USAGE["spent"]
         TOKEN_USAGE["history"].append({"t": int(time.time()), "delta": delta, "spent": TOKEN_USAGE["spent"]})
         BUS.publish({"type": "tokens", "tokens": token_view()})
+
+
+def swpc_poll_loop() -> None:
+    """NEO real-data wiring — poll NOAA SWPC every 60s.
+
+    Each feed has its own cache TTL inside `swpc_fetch_all`; this loop just
+    drives the cadence. On any feed failure it logs a MED severity audit row
+    so the operator dashboard surfaces the degradation (Weather.source flips
+    to "swpc-stale" or "simulated").
+    """
+    while True:
+        try:
+            snap = swpc_fetch_all(force=False)
+            errs = [(name, f.get("error")) for name, f in snap.items()
+                    if f.get("error")]
+            if errs and swpc_is_real_data_available():
+                BUS.copilot("nemoclaw",
+                            f"SWPC poller — {len(errs)} feeds errored; using last-good cache",
+                            severity="MED", action="SWPC_PARTIAL_DEGRADE")
+            elif errs:
+                BUS.copilot("nemoclaw",
+                            f"SWPC poller — ALL feeds failed; falling back to simulated weather",
+                            severity="HIGH", action="SWPC_FULL_DEGRADE")
+        except Exception as e:
+            BUS.copilot("nemoclaw",
+                        f"swpc_poll_loop unexpected error: {e}",
+                        severity="HIGH", action="SWPC_LOOP_ERROR")
+        time.sleep(60)
 
 
 def reprobe_loop() -> None:
@@ -2169,12 +2315,31 @@ def main() -> None:
     except Exception as e:
         print(f"[spacesharks-desk] Ollama probe failed: {e}", flush=True)
 
+    # NEO real-data: pre-flight Celestrak TLE refresh + first SWPC poll.
+    # If the network is unreachable both calls return cleanly with a fallback;
+    # the operator dashboard will show source="simulated" until SWPC comes back.
+    try:
+        tle_result = refresh_tle_cache(force=False)
+        print(f"[spacesharks-desk] Celestrak TLE: {tle_result}", flush=True)
+    except Exception as e:
+        print(f"[spacesharks-desk] Celestrak TLE refresh failed: {e}", flush=True)
+    try:
+        first_swpc = swpc_fetch_all(force=False)
+        kp_val = first_swpc.get("kp_1m", {}).get("value")
+        xray_val = first_swpc.get("xray_1d", {}).get("value")
+        sep_val = first_swpc.get("sep_1d", {}).get("value")
+        print(f"[spacesharks-desk] SWPC live: Kp={kp_val} xray={xray_val} sep={sep_val}", flush=True)
+    except Exception as e:
+        print(f"[spacesharks-desk] SWPC initial fetch failed: {e}", flush=True)
+
     threading.Thread(target=assessment_loop, daemon=True).start()
     threading.Thread(target=copilot_loop, daemon=True).start()
     threading.Thread(target=token_history_loop, daemon=True).start()
     threading.Thread(target=reprobe_loop, daemon=True).start()
     # NEO Action Item 2 — COTS telemetry + JPL detector
     threading.Thread(target=cots_telemetry_loop, daemon=True).start()
+    # NEO real-data — NOAA SWPC poller
+    threading.Thread(target=swpc_poll_loop, daemon=True).start()
 
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"[spacesharks-desk] http://{args.host}:{args.port}/  (writing {JSONL})", flush=True)

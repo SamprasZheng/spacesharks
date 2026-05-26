@@ -43,12 +43,17 @@ def test_fallback_iss_tle_propagation_is_sensible():
     assert 7.0 <= result["speed_km_s"] <= 8.2, f"speed out of band: {result['speed_km_s']}"
 
 
-def test_starlink_propagation_at_now():
-    result = propagate("44737", ts_utc=time.time())
+def test_iss_propagation_at_now():
+    """Use ISS (25544) — present in both the bundled fallback AND the live
+    Celestrak feed, so this test is stable regardless of which source is
+    active. Some early Starlink NORAD IDs (e.g. 44737 from 2020) have been
+    deorbited and removed from active TLE feeds — that's real data being
+    honest."""
+    result = propagate("25544", ts_utc=time.time())
     assert result is not None
     assert result["ok"] is True
-    # Starlink shell v1.0/G1 altitude band ~ 540..560 km
-    assert 400.0 <= result["alt_km"] <= 700.0
+    # ISS altitude band 400-430 km
+    assert 350.0 <= result["alt_km"] <= 500.0
 
 
 def test_unknown_norad_returns_none():
