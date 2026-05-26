@@ -444,13 +444,52 @@ WEATHER = Weather()
 # Different biases so they disagree productively.
 # ============================================================================
 
-ASSESSORS = [
-    {"id": "DeepProp-7B",      "family": "Nemotron-Nano",  "bias": "age",      "weight_age": 1.40, "weight_tid": 0.90, "weight_wx": 0.90, "tokens_per_call": 1100},
-    {"id": "OrbitNet-13B",     "family": "Hermes-4",       "bias": "radiation","weight_age": 0.90, "weight_tid": 1.45, "weight_wx": 1.00, "tokens_per_call": 1450},
-    {"id": "SatGuard-9B",      "family": "Mistral-deriv",  "bias": "weather",  "weight_age": 0.85, "weight_tid": 0.95, "weight_wx": 1.50, "tokens_per_call": 1250},
-    {"id": "Astro-AI-22B",     "family": "Qwen-3",         "bias": "balanced", "weight_age": 1.00, "weight_tid": 1.00, "weight_wx": 1.00, "tokens_per_call": 1900},
-    {"id": "Pathfinder-17B",   "family": "Nemotron-Super", "bias": "optimistic","weight_age": 0.80, "weight_tid": 0.80, "weight_wx": 0.85, "tokens_per_call": 1700},
-]
+# NEO post-2026-05-26 review — removed fake "DeepProp / OrbitNet / SatGuard /
+# Astro-AI / Pathfinder" demo names. The dashboard now shows REAL model IDs
+# from PRIMARY_MODELS so judges and reviewers see the actual lineup.
+#
+# In LIVE-OLLAMA mode each seat resolves to a real running model (verified
+# at boot via /api/tags). In SIM mode each seat falls back to a deterministic
+# arithmetic vote using the bias/weight table below — the snapshot label is
+# explicitly `"deterministic-arithmetic"` so the demo cannot accidentally
+# claim LLM output when no LLM is reachable.
+_SEAT_BIAS_TABLE = {
+    "ORBIT":     {"bias": "age",        "weight_age": 1.40, "weight_tid": 0.90, "weight_wx": 0.90, "tokens_per_call": 1100},
+    "TRIAGE":    {"bias": "triage",     "weight_age": 0.95, "weight_tid": 1.10, "weight_wx": 1.10, "tokens_per_call": 1450},
+    "EVIDENCE":  {"bias": "provenance", "weight_age": 1.00, "weight_tid": 1.00, "weight_wx": 1.00, "tokens_per_call": 1250},
+    "RADIATION": {"bias": "radiation",  "weight_age": 0.90, "weight_tid": 1.45, "weight_wx": 1.00, "tokens_per_call": 1100},
+    "IMPACT":    {"bias": "impact",     "weight_age": 0.85, "weight_tid": 0.95, "weight_wx": 1.20, "tokens_per_call": 1900},
+}
+
+
+# ASSESSORS is populated AFTER PRIMARY_MODELS is defined below. We declare an
+# empty placeholder here so `TOKEN_USAGE["by_model"]` initialisation (which
+# happens immediately after this block) doesn't NameError. The real list is
+# filled in by _build_assessors_from_lineup() further down.
+ASSESSORS: list[dict] = []
+
+
+def _build_assessors_from_lineup() -> list[dict]:
+    """Derive the assessor list from PRIMARY_MODELS so the dashboard always
+    reflects the real model lineup. Each assessor entry carries the real
+    model_id (e.g. `nemotron-3-nano:4b`) as its `id`, the real vendor/family
+    as its `family`, and a bias/weight tuple derived from the seat role."""
+    out = []
+    for m in PRIMARY_MODELS:
+        seat = m.get("seat") or "TRIAGE"
+        bias = _SEAT_BIAS_TABLE.get(seat, _SEAT_BIAS_TABLE["TRIAGE"])
+        out.append({
+            "id": m["id"],
+            "vendor": m["vendor"],
+            "family": m["family"],
+            "seat": seat,
+            "bias": bias["bias"],
+            "weight_age": bias["weight_age"],
+            "weight_tid": bias["weight_tid"],
+            "weight_wx": bias["weight_wx"],
+            "tokens_per_call": bias["tokens_per_call"],
+        })
+    return out
 
 NIMBLE_DAILY_QUOTA = 2_000_000   # synthetic daily token cap on Nimble Cloud
 TOKEN_USAGE = {
@@ -511,20 +550,36 @@ COUNCIL_SEATS = [
 #
 # MISSION_DIRECTOR escalates to Nemotron-Super 49B for tier-3 cloud calls per
 # INVARIANTS.md §"Tiered-inference cascade".
+# Lineup pinned to models actually present in the WSL Ollama instance
+# (verified at 2026-05-26 against /api/tags). Hermes-4-14B and Nemotron-3-
+# Super-49B are NOT pulled locally — they remain in the wish-list as tier-3
+# cloud candidates (via NVIDIA NIM under override O1 egress). For the local
+# demo the lineup is heavily Nemotron-Nano + Qwen-3 + Mistral, which still
+# satisfies INVARIANTS.md §"Specialist-arbiter rule" three-different-base-
+# model-families requirement (NVIDIA + Alibaba + Mistral AI).
 PRIMARY_MODELS = [
-    _mk_model("nemotron-3-nano:4b",   "NVIDIA",        "Nemotron-3-Nano",  "PRIMARY", 2.8, seat="ORBIT"),
-    _mk_model("hermes-4:14b",         "Nous Research", "Hermes-4",         "PRIMARY", 7.5, seat="TRIAGE"),
-    _mk_model("qwen3:4b",             "Alibaba",       "Qwen-3",           "PRIMARY", 2.5, seat="EVIDENCE"),
-    _mk_model("nemotron-3-nano:4b",   "NVIDIA",        "Nemotron-3-Nano",  "PRIMARY", 2.8, seat="RADIATION"),
-    _mk_model("nemotron-3-super:49b", "NVIDIA",        "Nemotron-3-Super", "PRIMARY", 26.0, seat="IMPACT"),
+    _mk_model("nemotron-3-nano:4b",   "NVIDIA",      "Nemotron-3-Nano",  "PRIMARY", 2.8, seat="ORBIT"),
+    _mk_model("qwen3:4b",             "Alibaba",     "Qwen-3",           "PRIMARY", 2.5, seat="TRIAGE"),
+    _mk_model("mistral:7b",           "Mistral AI",  "Mistral-7B",       "PRIMARY", 4.1, seat="EVIDENCE"),
+    _mk_model("nemotron-3-nano:4b",   "NVIDIA",      "Nemotron-3-Nano",  "PRIMARY", 2.8, seat="RADIATION"),
+    _mk_model("nemotron-3-nano:4b",   "NVIDIA",      "Nemotron-3-Nano",  "PRIMARY", 2.8, seat="IMPACT"),
 ]
 BACKUP_MODELS = [
-    _mk_model("nemotron-3-nano:9b",   "NVIDIA",        "Nemotron-3-Nano",  "BACKUP",  5.2),
-    _mk_model("mistral:7b",           "Mistral AI",    "Mistral-7B",       "BACKUP",  4.1),
-    _mk_model("llama3.2:3b",          "Meta",          "Llama-3.2",        "BACKUP",  2.0),
+    _mk_model("llama3.1:8b",          "Meta",        "Llama-3.1",        "BACKUP",  4.7),
+    _mk_model("deepseek-r1:7b",       "DeepSeek",    "DeepSeek-R1",      "BACKUP",  4.7),
+    _mk_model("phi3.5:latest",        "Microsoft",   "Phi-3.5",          "BACKUP",  2.3),
 ]
-MISSION_DIRECTOR = _mk_model("nemotron-3-super:49b", "NVIDIA", "Nemotron-3-Super", "DIRECTOR", 26.0)
+# Local Mission Director — Nemotron-Nano for the live demo. Tier-3 escalation
+# to Nemotron-Super-49B (cloud, via NIM) is configured but the cloud model is
+# not invoked unless an override flag fires (see _model_ask_tiered, future).
+MISSION_DIRECTOR = _mk_model("nemotron-3-nano:4b", "NVIDIA", "Nemotron-3-Nano", "DIRECTOR", 2.8)
 MISSION_DIRECTOR["seat"] = "DIRECTOR"
+
+# Now that PRIMARY_MODELS is defined, populate ASSESSORS with REAL model IDs.
+# TOKEN_USAGE["by_model"] was initialised against the empty list above; refresh
+# it now so the token accounting maps onto real model identifiers.
+ASSESSORS = _build_assessors_from_lineup()
+TOKEN_USAGE["by_model"] = {a["id"]: 0 for a in ASSESSORS}
 
 CONSECUTIVE_FAIL_THRESHOLD = 3
 
