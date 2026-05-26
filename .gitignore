@@ -50,6 +50,9 @@ desk/data/audit/offline-batches/*.jsonl
 data/tle/*.tle
 desk/data/tle/*.tle
 
+# Dashboard screenshots — generated artifacts, not source
+dashboard-*.png
+
 # Logs
 *.log
 logs/

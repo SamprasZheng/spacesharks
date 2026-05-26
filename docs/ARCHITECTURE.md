@@ -2,15 +2,14 @@
 
 ## Overview
 
-The system is designed as a safe, long-running decision loop rather than a chatbot.
+The system is designed as a safe, long-running Starlink fleet triage loop rather than a chatbot or generic satellite dashboard.
 
 ```mermaid
 flowchart LR
   subgraph Sources["Public signal sources"]
     SWPC["NOAA SWPC"]
-    TLE["Celestrak / TLE"]
+    TLE["CelesTrak Starlink TLE"]
     CDM["Space-Track / CDM"]
-    NOTAM["FAA NOTAM"]
   end
 
   subgraph Runtime["Controlled runtime"]
@@ -20,22 +19,24 @@ flowchart LR
   end
 
   subgraph Models["Model tier"]
+    F["Fleet sampler: 50 Starlink objects"]
     A["Small model A: classify"]
     B["Small model B: score risk"]
-    C["Small model C: draft recommendation"]
+    C["Small model C: draft brief"]
     N["Nemotron: escalate / referee"]
   end
 
   subgraph Outputs["Outputs"]
-    R["Recommendation + confidence + evidence"]
+    R["Red/yellow/green triage + evidence"]
     L["Event log / JSONL"]
-    D["Dashboard / timeline / demo"]
+    D["Today / 7-day / 30-day brief"]
   end
 
   Sources --> NC --> OC
-  OC --> A
-  OC --> B
-  OC --> C
+  OC --> F
+  F --> A
+  F --> B
+  F --> C
   A --> N
   B --> N
   C --> N
@@ -45,11 +46,13 @@ flowchart LR
 
 ## Execution pattern
 
-1. Ingest a small number of high-value events
-2. Normalize each event into a structured record
-3. Run lightweight models first
-4. Escalate only when uncertainty or risk is high
-5. Persist the full decision trail
+1. Select a representative Starlink sample fleet
+2. Ingest public orbit and space-environment signals
+3. Normalize each satellite snapshot into a structured record
+4. Run lightweight models first
+5. Escalate red, disputed, or low-confidence cases to `Nemotron`
+6. Persist the full decision trail
+7. Generate today, 7-day, and 30-day briefs
 
 ## Design principles
 
@@ -58,3 +61,4 @@ flowchart LR
 - Cost awareness: small models do the default work
 - Escalation only when needed: reserve `Nemotron` for harder cases
 - Replayability: every result must be reconstructable from the log
+- Fleet focus: Starlink is the main object set; MEO/GEO are optional benchmark references, not the core demo
