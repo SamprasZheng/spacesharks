@@ -67,6 +67,17 @@ from desk.nemoclaw import (
 from desk.physics import TelemetryStream, propagate as sgp4_propagate, telemetry_buffer_for
 from desk.detect import detect as jpl_detect
 
+# NEO Action Item 3 — Function Calling beam-redirect drafts. Operates under
+# INVARIANTS override O2 (4th Phase-4 decision verb; decision_route locked to
+# needs-review; never auto-publish, never auto-execute).
+from desk.decisions import (
+    BeamRedirectDraft,
+    brief_beam_redirect,
+    BEAM_REDIRECT_TOOL_SCHEMA,
+    kb_lookup,
+    kb_load,
+)
+
 ROOT = Path(__file__).resolve().parent
 WEB = ROOT / "web"
 DATA = ROOT / "data"
@@ -1508,6 +1519,10 @@ def cots_run_detector(sat_id: str) -> dict:
     """Run JPL detector on the current 1024-sample current_mA window for
     `sat_id`. Writes an audit row when an anomaly is detected. Returns the
     detector result as a dict for /api/cots/telemetry/<sat_id>.
+
+    On `see` / `dielectric_charge` detection, also drafts a beam-redirect
+    proposal (NEO Action Item 3) — appended to BEAM_DRAFTS_QUEUE under
+    decision_route=needs-review.
     """
     stream = cots_init()
     series = telemetry_buffer_for(stream, sat_id, "current_mA")
@@ -1546,7 +1561,76 @@ def cots_run_detector(sat_id: str) -> dict:
                 "magnitude": res.magnitude,
                 "ts": time.time(),
             }
+            # NEO Action Item 3 — auto-draft a beam-redirect if the regime
+            # is comms-relevant. We don't have a real "emergency-ground-
+            # location" feed in scope; for the hackathon we use the sat's
+            # current sub-satellite point (from SGP4) as a placeholder
+            # target. A real deployment would consume a disaster-feed input.
+            if res.regime in ("see", "dielectric_charge"):
+                _maybe_draft_beam_redirect(sat, res.regime, res.magnitude)
     return out
+
+
+# Per-sat draft cooldown so we don't flood the inbox on repeated detections.
+BEAM_DRAFT_COOLDOWN_S = 600.0  # 10 minutes
+_BEAM_DRAFT_LAST: dict[str, float] = {}
+BEAM_DRAFTS_QUEUE: list[dict] = []   # most-recent first; capped at 50
+
+
+def _maybe_draft_beam_redirect(sat: dict, regime: str, magnitude: float) -> dict | None:
+    sat_id = str(sat.get("id"))
+    now_ts = time.time()
+    if now_ts - _BEAM_DRAFT_LAST.get(sat_id, 0.0) < BEAM_DRAFT_COOLDOWN_S:
+        return None
+    orbit = sgp4_propagate(sat_id, ts_utc=now_ts)
+    if not orbit or not orbit.get("ok"):
+        return None
+
+    # Demo-time target: use the sub-satellite point itself. A production
+    # deployment would substitute a disaster-feed lookup here.
+    target_lat = orbit["lat_deg"]
+    target_lon = orbit["lon_deg"]
+
+    draft = brief_beam_redirect(
+        sat=sat,
+        anomaly_regime=regime,
+        target_lat_deg=target_lat,
+        target_lon_deg=target_lon,
+        confidence=min(0.95, 0.5 + 0.05 * magnitude),
+        sub_sat_lat=target_lat,
+        sub_sat_lon=target_lon,
+        sat_alt_km=orbit["alt_km"],
+        incident_summary=f"Demo target — sub-satellite point at "
+                         f"({target_lat:.2f}, {target_lon:.2f}) used as "
+                         f"emergency surrogate.",
+    )
+
+    # Output-guard the justification before publishing — closes review2.md's
+    # "NemoClaw is no-op" critique end-to-end on this verb.
+    allow, scrubbed, denied = output_guard(draft.justification)
+    if not allow:
+        BUS.copilot("nemoclaw",
+                    f"beam-redirect draft for {sat_id} BLOCKED by output_guard",
+                    severity="HIGH", action="BEAM_REDIRECT_BLOCKED",
+                    sat_id=sat_id, denied_actions=denied,
+                    override_invariant="O2-decision-verb-4th")
+        return None
+
+    draft_dict = draft.to_dict()
+    _BEAM_DRAFT_LAST[sat_id] = now_ts
+    BEAM_DRAFTS_QUEUE.insert(0, draft_dict)
+    if len(BEAM_DRAFTS_QUEUE) > 50:
+        BEAM_DRAFTS_QUEUE.pop()
+
+    BUS.copilot("model:nemotron-3-super:49b",
+                f"draft beam-redirect for {sat_id} (regime={regime}, "
+                f"tilt={draft.tilt_deg:.1f}°, duration={draft.duration_s}s)",
+                severity="MED", action="BEAM_REDIRECT_DRAFT",
+                sat_id=sat_id, decision_route="needs-review",
+                evidence_pointers=draft.evidence_pointers,
+                override_invariant="O2-decision-verb-4th")
+    BUS.publish({"type": "beam_redirect_draft", "draft": draft_dict})
+    return draft_dict
 
 
 def cots_telemetry_loop() -> None:
@@ -1907,6 +1991,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(cots_run_detector(sat_id)); return
         if path == "/api/cots/latest":
             self._send_json({"results": COTS_LATEST}); return
+        # NEO Action Item 3 — beam-redirect drafts queue
+        if path == "/api/decisions/beam-redirect/queue":
+            self._send_json({"drafts": list(BEAM_DRAFTS_QUEUE), "count": len(BEAM_DRAFTS_QUEUE)}); return
+        if path == "/api/decisions/beam-redirect/tool-schema":
+            self._send_json(BEAM_REDIRECT_TOOL_SCHEMA); return
+        if path == "/api/kb/source":
+            entries, source = kb_load()
+            self._send_json({"source": source, "count": len(entries)}); return
         self.send_error(404)
 
     def _serve_sse(self) -> None:
@@ -1959,6 +2051,44 @@ class Handler(BaseHTTPRequestHandler):
             kind = body.get("kind", "flare")
             run_terminal_command(f"storm {kind}")
             self._send_json({"ok": True}); return
+        if self.path == "/api/decisions/beam-redirect/draft":
+            # NEO Action Item 3 — manually request a beam-redirect draft on
+            # demand. Used in the demo when an SEE anomaly has already
+            # recovered but the operator wants to draft anyway.
+            sat_id = str(body.get("sat", ""))
+            target_lat = float(body.get("target_lat", 0.0))
+            target_lon = float(body.get("target_lon", 0.0))
+            regime = body.get("regime", "see")
+            sat = find_sat(sat_id)
+            if not sat:
+                self._send_json({"error": f"unknown sat {sat_id}"}, status=404); return
+            orbit = sgp4_propagate(sat_id, ts_utc=time.time())
+            draft = brief_beam_redirect(
+                sat=sat,
+                anomaly_regime=regime,
+                target_lat_deg=target_lat,
+                target_lon_deg=target_lon,
+                confidence=0.75,
+                sub_sat_lat=(orbit or {}).get("lat_deg") if orbit else None,
+                sub_sat_lon=(orbit or {}).get("lon_deg") if orbit else None,
+                sat_alt_km=(orbit or {}).get("alt_km") if orbit else sat.get("altitude_km"),
+                incident_summary=body.get("incident_summary",
+                                          "operator-initiated draft"),
+            )
+            allow, _, denied = output_guard(draft.justification)
+            if not allow:
+                self._send_json({"blocked": True, "denied_actions": denied}, status=403); return
+            draft_dict = draft.to_dict()
+            BEAM_DRAFTS_QUEUE.insert(0, draft_dict)
+            if len(BEAM_DRAFTS_QUEUE) > 50:
+                BEAM_DRAFTS_QUEUE.pop()
+            BUS.copilot("user",
+                        f"operator-drafted beam-redirect for {sat_id}",
+                        severity="MED", action="BEAM_REDIRECT_DRAFT_MANUAL",
+                        sat_id=sat_id, decision_route="needs-review",
+                        evidence_pointers=draft.evidence_pointers,
+                        override_invariant="O2-decision-verb-4th")
+            self._send_json(draft_dict); return
         if self.path == "/api/dev/inject-anomaly":
             # NEO Action Item 2 — manual SEE / dielectric_charge anomaly injection
             # for demo runs. Triggers a cooldown spike in the COTS stream that
