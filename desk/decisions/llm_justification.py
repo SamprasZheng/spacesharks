@@ -36,6 +36,7 @@ def _prompt_for_justification(
     duration_s: int,
     incident_summary: str,
     kb_entries: list,
+    wiki_hits: list | None = None,
 ) -> str:
     kb_lines = []
     for e in (kb_entries or [])[:3]:
@@ -44,10 +45,17 @@ def _prompt_for_justification(
         )
     kb_block = "\n".join(kb_lines) or "(no KB entries matched — proceed with caution)"
 
+    wiki_block = ""
+    if wiki_hits:
+        wiki_block = "\nRelevant local wiki context (cite by [path] if you use it):\n"
+        for h in wiki_hits[:3]:
+            wiki_block += f"  - [{h.path}] {h.title}: {h.snippet[:180]}\n"
+
     return (
-        "You are the Spacesharks Mission Desk arbiter. You have been asked to "
-        "draft the JUSTIFICATION TEXT for a needs-review beam-redirect proposal. "
-        "Write ONE PARAGRAPH (3-5 sentences, plain text, no markdown) explaining:\n"
+        "You are the Spacesharks Mission Desk arbiter, backed by Nemotron-Nano-4B "
+        "running locally on RTX 5070. You have been asked to draft the JUSTIFICATION "
+        "TEXT for a needs-review beam-redirect proposal. Write ONE PARAGRAPH "
+        "(3-5 sentences, plain text, no markdown) explaining:\n"
         "  - what the SEE/dielectric anomaly was\n"
         "  - why redirecting the downlink beam to the target coordinate is a "
         "    defensible operator response\n"
@@ -61,7 +69,8 @@ def _prompt_for_justification(
         f"Proposed beam tilt: {tilt_deg:.1f} degrees off-nadir\n"
         f"Proposed hold duration: {duration_s} seconds\n"
         f"Incident context: {incident_summary}\n\n"
-        f"Relevant KB entries:\n{kb_block}\n\n"
+        f"Relevant COTS KB entries:\n{kb_block}"
+        f"{wiki_block}\n"
         "Respond with only the justification paragraph; no preamble, no "
         "follow-up questions."
     )
@@ -96,6 +105,15 @@ def llm_justify_beam_redirect(
     On any failure we return the templated fallback so the caller is never
     blocked. The `source` field tells the dashboard which path was taken.
     """
+    # Wiki RAG enrichment — pull 3 relevant pages from D:/DOT/yxz/wiki
+    wiki_hits = []
+    try:
+        from desk.knowledge.wiki_rag import wiki_retrieve
+        q = f"{anomaly_regime} {sat_id} satellite beam redirect downlink SEE radiation"
+        wiki_hits = wiki_retrieve(q, top_k=3)
+    except Exception:
+        wiki_hits = []
+
     prompt = _prompt_for_justification(
         sat_id=sat_id,
         anomaly_regime=anomaly_regime,
@@ -105,6 +123,7 @@ def llm_justify_beam_redirect(
         duration_s=duration_s,
         incident_summary=incident_summary,
         kb_entries=kb_entries,
+        wiki_hits=wiki_hits,
     )
     prompt_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 

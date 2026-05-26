@@ -16,5 +16,11 @@ the live audit_completeness scoreboard metric.
 
 from desk.knowledge.schema import KBEntrySchema, validate_kb_payload
 from desk.knowledge.build_cots_kb import build_kb, EXPANSION_MATRIX
+from desk.knowledge.wiki_rag import (
+    wiki_retrieve, wiki_rebuild, wiki_stats, WikiHit,
+)
 
-__all__ = ["KBEntrySchema", "validate_kb_payload", "build_kb", "EXPANSION_MATRIX"]
+__all__ = [
+    "KBEntrySchema", "validate_kb_payload", "build_kb", "EXPANSION_MATRIX",
+    "wiki_retrieve", "wiki_rebuild", "wiki_stats", "WikiHit",
+]

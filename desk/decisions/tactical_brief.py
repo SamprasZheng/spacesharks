@@ -42,20 +42,27 @@ _CACHE: dict = {
 }
 
 
-def _prompt(fleet_state: dict, weather: dict, recent_audit_actions: list[str]) -> str:
+def _prompt(fleet_state: dict, weather: dict, recent_audit_actions: list[str],
+            wiki_hits: list | None = None) -> str:
     fh = fleet_state.get("fleet_health", {})
     recent = ", ".join(recent_audit_actions[:8]) or "(no recent actions)"
+    wiki_block = ""
+    if wiki_hits:
+        wiki_block = "\nRelevant wiki context (cite by [path] if used):\n"
+        for h in wiki_hits[:3]:
+            wiki_block += f"  - [{h.path}] {h.title}: {h.snippet[:200]}\n"
     return (
-        "You are the NEO ORBITAL DATA CENTER OS tactical arbiter. Write a "
-        "THREE-SENTENCE executive brief for the operator looking at the "
-        "dashboard right now. Be concrete; cite numbers; mention any RED "
-        "satellites by name if present. Do not invent satellites that are "
-        "not in the snapshot.\n\n"
+        "You are the NEO ORBITAL DATA CENTER OS tactical arbiter, backed by "
+        "Nemotron-Nano-4B running locally on RTX 5070. Write a THREE-SENTENCE "
+        "executive brief for the operator looking at the dashboard right now. "
+        "Be concrete; cite numbers; mention any RED satellites by name if "
+        "present. Do not invent satellites that are not in the snapshot.\n\n"
         f"Fleet health counts: {fh}\n"
         f"Live space weather (from NOAA SWPC): Kp={weather.get('kp')} "
         f"X-ray={weather.get('xray_class')} SEP={weather.get('sep_pfu')} pfu, "
         f"source={weather.get('source')}\n"
-        f"Recent NemoClaw audit actions: {recent}\n\n"
+        f"Recent NemoClaw audit actions: {recent}"
+        f"{wiki_block}\n"
         "Respond with only the three-sentence brief — no preamble, no "
         "bullet points, no markdown. Plain text only."
     )
@@ -136,7 +143,19 @@ def refresh_tactical_brief(
             out["ttl_remaining_s"] = ttl_remaining
             return out
 
-    prompt = _prompt(fleet_state, weather, recent_audit_actions)
+    # Inject wiki RAG context — pull 3 most relevant wiki pages based on the
+    # current weather + audit actions. Local-only, no API cost.
+    wiki_hits = []
+    try:
+        from desk.knowledge.wiki_rag import wiki_retrieve
+        ra_actions_q = " ".join(recent_audit_actions[:10])
+        wx_q = f"Kp {weather.get('kp')} X-ray {weather.get('xray_class')} SEP {weather.get('sep_pfu')}"
+        query = f"satellite fleet operations {wx_q} {ra_actions_q} space weather NemoClaw"
+        wiki_hits = wiki_retrieve(query, top_k=3)
+    except Exception:
+        wiki_hits = []
+
+    prompt = _prompt(fleet_state, weather, recent_audit_actions, wiki_hits=wiki_hits)
     prompt_hash = "sha256:" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     result = _model_call(prompt, model_id=model_id, ollama_url=ollama_url)
 
@@ -151,6 +170,7 @@ def refresh_tactical_brief(
         "latency_ms": result["latency_ms"],
         "eval_count": result["eval_count"],
         "error": result["error"],
+        "wiki_hits": [{"path": h.path, "title": h.title, "score": h.score} for h in wiki_hits],
     }
     # Carry forward the previous text on failure so the dashboard never goes blank.
     if not result["ok"]:

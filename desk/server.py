@@ -2529,6 +2529,31 @@ class Handler(BaseHTTPRequestHandler):
                     if pair.startswith("metric="):
                         metric = pair.split("=", 1)[1]
             self._send_json(_neo_timeseries_view(metric)); return
+        if path == "/api/neo/storage-audit":
+            from desk.admin.storage_audit import storage_audit
+            self._send_json(storage_audit()); return
+        if path == "/api/neo/wiki/stats":
+            from desk.knowledge.wiki_rag import wiki_stats
+            self._send_json(wiki_stats()); return
+        if path == "/api/neo/wiki/retrieve":
+            from desk.knowledge.wiki_rag import wiki_retrieve
+            q = None
+            top_k = 5
+            if "?" in self.path:
+                qs = self.path.split("?", 1)[1]
+                for pair in qs.split("&"):
+                    if pair.startswith("q="):
+                        from urllib.parse import unquote
+                        q = unquote(pair.split("=", 1)[1])
+                    elif pair.startswith("k="):
+                        try: top_k = int(pair.split("=", 1)[1])
+                        except ValueError: pass
+            hits = wiki_retrieve(q or "", top_k=top_k)
+            self._send_json({
+                "query": q,
+                "top_k": top_k,
+                "hits": [{"path": h.path, "title": h.title, "snippet": h.snippet, "score": h.score} for h in hits],
+            }); return
         self.send_error(404)
 
     def _serve_sse(self) -> None:

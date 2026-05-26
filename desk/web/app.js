@@ -115,15 +115,21 @@
     STATE.inference = inf;
     const live = inf.mode === "LIVE-OLLAMA";
     els.inferBadge.classList.toggle("live", live);
-    els.inferMode.textContent = inf.mode;
+    // NEO rename — Nemotron is the protagonist, not Ollama (Ollama is just the
+    // runtime that hosts the Nemotron weights on RTX 5070).
     const lineup = inf.lineup || [];
     const alive = lineup.filter(m => m.alive && m.loaded);
+    const nemoSeats = lineup.filter(m =>
+      (m.vendor === "NVIDIA") || (m.family && m.family.toLowerCase().includes("nemotron"))
+    ).length;
     if (live) {
+      els.inferMode.textContent = "NEMOTRON · LIVE";
       const dirMs = inf.director_last_ms ? `· dir ${inf.director_last_ms}ms ` : "";
       els.inferSub.textContent =
-        `${alive.length}/${lineup.length} seats · ${inf.live_calls} calls ${dirMs}· VRAM ${inf.host_gpu ? Math.round(100 * inf.host_gpu.mem_used_mib / inf.host_gpu.mem_total_mib) + "%" : "?"}`;
+        `${nemoSeats}/${lineup.length} Nemotron seats · ${inf.live_calls} local calls ${dirMs}· VRAM ${inf.host_gpu ? Math.round(100 * inf.host_gpu.mem_used_mib / inf.host_gpu.mem_total_mib) + "%" : "?"}`;
     } else {
-      els.inferSub.textContent = `${inf.available_models?.length || 0} models reachable — click to go LIVE`;
+      els.inferMode.textContent = "NEMOTRON · OFFLINE";
+      els.inferSub.textContent = `${inf.available_models?.length || 0} models reachable — click to bring Nemotron live`;
     }
     if (inf.host_gpu) {
       els.gpuName.textContent = inf.host_gpu.name.replace("NVIDIA GeForce ", "");
@@ -134,11 +140,22 @@
     renderLineup(inf);
   }
   els.inferBadge.addEventListener("click", async () => {
-    els.inferSub.textContent = "probing Ollama…";
+    const prevSub = els.inferSub.textContent;
+    els.inferSub.textContent = "probing local Nemotron…";
     try {
       const r = await fetch("/api/probe-ollama", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(r => r.json());
-      if (!r.ok) els.inferSub.textContent = r.reason || "probe failed";
-    } catch (err) { els.inferSub.textContent = "probe error: " + err; }
+      if (r.ok) {
+        els.inferSub.textContent = `Nemotron ${r.model} responded in ${Math.round(r.ms)}ms · ${r.available?.length || 0} models loaded`;
+        // Clear any stale error after 8s — the state SSE stream will re-render.
+        setTimeout(() => { if (els.inferSub.textContent.startsWith("Nemotron ")) renderInference(STATE.inference); }, 8000);
+      } else {
+        els.inferSub.textContent = r.reason || "probe failed";
+      }
+    } catch (err) {
+      // Don't leave the stale error sticky — fall back to renderInference after 4s.
+      els.inferSub.textContent = "probe error: " + (err?.message || err);
+      setTimeout(() => renderInference(STATE.inference), 4000);
+    }
   });
 
   function renderLineup(inf) {
@@ -908,7 +925,74 @@
         `${r.ts || "?"}  ${r.severity || "INFO"}  ${(r.who || "").slice(0,28).padEnd(28)}  ${r.action || ""}  ${(r.msg || "").slice(0, 100)}`
       ).join("\n") || "(no audit rows yet)";
     } catch (e) { /* ignore */ }
+    try {
+      const audit = await fetch("/api/neo/storage-audit").then(r => r.json());
+      const stEl = $("neo-dev-storage");
+      if (stEl) {
+        let s = `TOTAL: ${audit.total_human} across ${audit.sections.length} categories\n\n`;
+        for (const sec of audit.sections) {
+          s += `[${sec.size_human.padStart(10)}]  ${sec.category}\n`;
+          s += `              path: ${sec.path}\n`;
+          s += `              ${sec.rotation}\n`;
+          if (sec.models && sec.models.length) {
+            for (const m of sec.models) {
+              s += `                  ${m.size.padStart(8)}  ${m.name}\n`;
+            }
+          }
+          s += "\n";
+        }
+        s += "─── CLEANUP RECOMMENDATIONS ───\n";
+        for (const rec of (audit.recommendations || [])) {
+          s += `\n  [${rec.severity}] ${rec.action}  (save ${rec.estimated_saving_human})\n`;
+          s += `  → ${rec.reason}\n`;
+          if (rec.command_wsl) s += `  wsl$ ${rec.command_wsl}\n`;
+          if (rec.command_bash) s += `  bash$ ${rec.command_bash}\n`;
+        }
+        stEl.textContent = s;
+      }
+    } catch (e) { /* ignore */ }
+    try {
+      const w = await fetch("/api/neo/wiki/stats").then(r => r.json());
+      const wEl = $("neo-dev-wiki");
+      if (wEl && !wEl.dataset.searched) {
+        wEl.textContent =
+          `index built:    ${new Date(w.built_at * 1000).toISOString()}\n` +
+          `build duration: ${w.build_ms} ms\n` +
+          `pages indexed:  ${w.n_docs}\n` +
+          `unique terms:   ${w.unique_terms}\n` +
+          `wiki root:      ${w.wiki_root}\n\n` +
+          `Type a query above to retrieve. Examples:\n` +
+          `  - "SEE latch-up current spike COTS"\n` +
+          `  - "Polkadot JAM coretime"\n` +
+          `  - "NemoClaw policy guardrail audit log"\n` +
+          `  - "solar flare X-ray radiation LEO"\n`;
+      }
+    } catch (e) { /* ignore */ }
   }
+
+  // Wiki RAG search box
+  document.addEventListener("click", async (ev) => {
+    if (ev.target?.id !== "neo-wiki-search-btn") return;
+    const q = document.getElementById("neo-wiki-query")?.value?.trim();
+    if (!q) return;
+    const wEl = document.getElementById("neo-dev-wiki");
+    if (!wEl) return;
+    wEl.dataset.searched = "1";
+    wEl.textContent = `retrieving "${q}"…`;
+    try {
+      const r = await fetch(`/api/neo/wiki/retrieve?q=${encodeURIComponent(q)}&k=5`).then(r => r.json());
+      let s = `query: "${r.query}"  ·  ${r.hits?.length || 0} hits\n\n`;
+      for (const h of (r.hits || [])) {
+        s += `[score ${h.score.toFixed(2)}]  ${h.path}\n  title:   ${h.title}\n  snippet: ${h.snippet}\n\n`;
+      }
+      wEl.textContent = s || "(no hits)";
+    } catch (e) { wEl.textContent = "search error: " + (e?.message || e); }
+  });
+  document.addEventListener("keypress", (ev) => {
+    if (ev.target?.id === "neo-wiki-query" && ev.key === "Enter") {
+      document.getElementById("neo-wiki-search-btn")?.click();
+    }
+  });
   setInterval(() => {
     if (document.getElementById("neo-developer-view")?.style.display !== "none") refreshNeoDevView();
   }, 5_000);

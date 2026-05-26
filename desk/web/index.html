@@ -19,9 +19,9 @@
         <span id="neo-test-badge" title="pytest status — refreshed every 5 min" style="font-weight:600;color:#34d399">TESTS —</span>
       </div>
     </div>
-    <div class="infer-badge" id="infer-badge" title="Click to probe local Ollama / RTX 5070">
-      <span class="infer-mode" id="infer-mode">SIM-MODE</span>
-      <span class="infer-sub"  id="infer-sub">no real inference — click to probe Ollama</span>
+    <div class="infer-badge" id="infer-badge" title="Click to probe local Nemotron on RTX 5070 (Ollama runtime)">
+      <span class="infer-mode" id="infer-mode">NEMOTRON · BOOTING</span>
+      <span class="infer-sub"  id="infer-sub">probing local Nemotron on RTX 5070…</span>
     </div>
   </div>
   <div class="ops-strip">
@@ -174,6 +174,18 @@
       <pre id="neo-dev-audit" style="margin:0;color:#94a3b8;white-space:pre-wrap;font-size:10px;line-height:1.5;max-height:340px;overflow-y:auto">loading...</pre>
     </div>
     <div style="background:#08182a;border:1px solid #1e3a52;border-radius:6px;padding:14px;grid-column:span 2">
+      <div style="font-size:11px;color:#fbbf24;font-weight:600;letter-spacing:0.12em;margin-bottom:10px">STORAGE AUDIT — what data is on disk + cleanup recommendations</div>
+      <pre id="neo-dev-storage" style="margin:0;color:#94a3b8;white-space:pre-wrap;font-size:10px;line-height:1.5;max-height:340px;overflow-y:auto">loading...</pre>
+    </div>
+    <div style="background:#08182a;border:1px solid #1e3a52;border-radius:6px;padding:14px;grid-column:span 2">
+      <div style="font-size:11px;color:#22d3ee;font-weight:600;letter-spacing:0.12em;margin-bottom:10px">LOCAL WIKI RAG — 184 yxz wiki pages indexed for Nemotron context</div>
+      <div style="margin-bottom:8px;display:flex;gap:6px;align-items:center">
+        <input id="neo-wiki-query" type="text" placeholder="search wiki…  e.g. 'SEE latch-up current spike'" style="flex:1;background:#020a14;border:1px solid #1e3a52;color:#cbd5e1;padding:6px 8px;border-radius:4px;font-size:11px;font-family:ui-monospace,monospace"/>
+        <button id="neo-wiki-search-btn" style="background:#0a4564;color:#7dd3fc;border:1px solid #1e3a52;padding:6px 12px;border-radius:4px;font-size:11px;cursor:pointer">RETRIEVE</button>
+      </div>
+      <pre id="neo-dev-wiki" style="margin:0;color:#94a3b8;white-space:pre-wrap;font-size:10px;line-height:1.5;max-height:240px;overflow-y:auto">loading wiki stats...</pre>
+    </div>
+    <div style="background:#08182a;border:1px solid #1e3a52;border-radius:6px;padding:14px;grid-column:span 2">
       <div style="font-size:11px;color:#a78bfa;font-weight:600;letter-spacing:0.12em;margin-bottom:10px">API ENDPOINTS</div>
       <ul id="neo-dev-endpoints" style="margin:0;padding-left:18px;color:#94a3b8;line-height:1.7">
         <li><code style="color:#7dd3fc">GET /api/state</code> — full snapshot</li>
@@ -187,6 +199,9 @@
         <li><code style="color:#7dd3fc">GET /api/neo/test-status</code> — pytest pass/fail counts</li>
         <li><code style="color:#7dd3fc">GET /api/neo/provenance</code> — aggregated real-vs-derived view</li>
         <li><code style="color:#7dd3fc">GET /api/neo/timeseries?metric=&lt;name&gt;</code> — Prometheus-style history</li>
+        <li><code style="color:#7dd3fc">GET /api/neo/storage-audit</code> — disk usage + cleanup recommendations</li>
+        <li><code style="color:#7dd3fc">GET /api/neo/wiki/stats</code> — wiki RAG index stats (184 pages, 10717 unique terms)</li>
+        <li><code style="color:#7dd3fc">GET /api/neo/wiki/retrieve?q=&lt;query&gt;&amp;k=5</code> — wiki RAG retrieval</li>
         <li><code style="color:#fbbf24">POST /api/dev/inject-anomaly</code> — manual SEE/dielectric injection</li>
         <li><code style="color:#fbbf24">POST /api/decisions/beam-redirect/draft</code> — manual draft</li>
       </ul>
