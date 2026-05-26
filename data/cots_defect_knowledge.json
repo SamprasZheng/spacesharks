@@ -1,0 +1,994 @@
+{
+  "version": "1.0.0",
+  "built_at": "2026-05-26T14:51:40Z",
+  "build_mode": "seed-only",
+  "entry_count": 58,
+  "entries": [
+    {
+      "entry_id": "see-sel-leo-001",
+      "failure_mode": "see",
+      "component_class": "power-rail",
+      "regime": "LEO",
+      "question": "What is the immediate signature of a Single Event Latch-up on a COTS power rail?",
+      "answer": "Sudden current draw spike of 100-400 mA above nominal on the supply rail, lasting 0.4-1.5 s, accompanied by a rail voltage droop of 0.1-0.25 V. Mitigation: cycle the affected rail within the SEL hold-time budget (typically <2 s) before thermal runaway destroys the latched device.",
+      "authority_score": 0.9,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 Section 6.4",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A SEE Test Standard",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-set-leo-002",
+      "failure_mode": "see",
+      "component_class": "fpga",
+      "regime": "LEO",
+      "question": "How do Single Event Transients in FPGA configuration cells manifest in telemetry?",
+      "answer": "SEU/SET in configuration memory cause functional drift visible as elevated SEU bit-error-rate (BER > 1e-7) over the previous orbit's baseline. Scrub the configuration through partial reconfiguration; if BER stays elevated for >3 consecutive frames, full reconfiguration is recommended.",
+      "authority_score": 0.85,
+      "citations": [
+        {
+          "title": "Xilinx UG116 SEU Mitigation",
+          "url": "https://www.xilinx.com/support/documentation/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-cmos-leo-003",
+      "failure_mode": "tid",
+      "component_class": "cpu",
+      "regime": "LEO",
+      "question": "What current-leakage signature indicates TID accumulation on a CMOS SoC?",
+      "answer": "Exponential rise in idle leakage current (Iddq) of 10-30 % above the launch baseline over months of accumulated dose. At 1.5x baseline, expect thermal margin reduction; at 2x, consider operational duty-cycle reduction. Threshold-voltage shift causes timing-margin erosion in synchronous logic.",
+      "authority_score": 0.92,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "MIL-STD-883 TM 1019",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-eldr-leo-004",
+      "failure_mode": "tid",
+      "component_class": "mixed-signal",
+      "regime": "LEO",
+      "question": "What is the ELDR effect in bipolar mixed-signal devices?",
+      "answer": "Enhanced Low Dose Rate Sensitivity — bipolar devices accumulate damage faster at low dose rates (orbital exposure) than at high dose rates (lab testing). RDM >= 2x is recommended over standard 1.5x for bipolar circuits in LEO. Symptom: input offset voltage drift and beta degradation.",
+      "authority_score": 0.88,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 ELDR",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "charge-saa-leo-005",
+      "failure_mode": "dielectric_charge",
+      "component_class": "mixed-signal",
+      "regime": "LEO",
+      "question": "Why does deep dielectric charging risk peak during SAA passes after eclipse?",
+      "answer": "Eclipse darkness allows electron flux to accumulate in floating dielectrics without photoemission rebalancing; SAA's energetic electron belt amplifies the deposition rate. Discharge occurs on eclipse exit as sunlight re-ionizes the surrounding plasma. Symptom: sudden ground-referenced potential transient and visible voltage rail droop of 0.05-0.15 V lasting 0.2-0.6 s.",
+      "authority_score": 0.83,
+      "citations": [
+        {
+          "title": "ECSS-E-ST-20-06C Spacecraft Charging",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-mbu-leo-006",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "LEO",
+      "question": "How are Multiple Bit Upsets distinguished from Single Bit Upsets?",
+      "answer": "MBUs affect adjacent memory cells from a single ion strike; ECC SEC-DED codes detect but cannot correct them, surfacing as uncorrectable error counts in DRAM controller statistics. SBU rate in LEO ~1e-10 errors/bit-day; MBU rate is ~10x lower but rises sharply during SEP events.",
+      "authority_score": 0.86,
+      "citations": [
+        {
+          "title": "JEDEC JESD89A",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-sefi-leo-007",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "LEO",
+      "question": "What is a Single Event Functional Interrupt and how is it recovered?",
+      "answer": "SEFI is a transient functional disruption (lock-up, mode change) that does not directly destroy the device but requires reset to recover. Detect via watchdog timeout or heartbeat loss. Recovery: power-cycle the affected subsystem; if repeated SEFIs occur in <30 minute window, escalate to a safe-mode trigger.",
+      "authority_score": 0.85,
+      "citations": [
+        {
+          "title": "ESA ECSS-Q-ST-30-11C",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-gpu-leo-008",
+      "failure_mode": "tid",
+      "component_class": "gpu",
+      "regime": "LEO",
+      "question": "What TID hardness can be expected from a COTS NVIDIA Orin / Jetson SoC in LEO?",
+      "answer": "Aitech S-A2300 (Orin-based) certification at 10 krad(Si) bare die / 20 krad(Si) with shielded enclosure (May 2025 test data). Functional degradation above 20 krad shows VRAM ECC error rate climbing exponentially. For a 5-year LEO mission at 540 km, expect ~6 krad/yr behind 4 mm Al — well within margin.",
+      "authority_score": 0.82,
+      "citations": [
+        {
+          "title": "Aitech S-A2300 datasheet",
+          "url": "https://www.aitech.com/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-beam-redirect-leo-009",
+      "failure_mode": "see",
+      "component_class": "power-rail",
+      "regime": "LEO",
+      "question": "When does a beam-redirect recommendation outrank a safe-mode trigger?",
+      "answer": "When (a) the affected payload is the comms transponder rather than the bus, (b) a critical ground-disaster scenario (earthquake / aviation incident / armed conflict) overlaps the orbital ground track, AND (c) the SEL recovery is confirmed (current normalised, voltage stabilised). Drafting a beam-redirect script does not constitute an executable command — it is a needs-review proposal that the operator must approve via /api/approve.",
+      "authority_score": 0.75,
+      "citations": [
+        {
+          "title": "Spacesharks INVARIANTS.md O2 override",
+          "url": "internal://docs/INVARIANTS.md"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-x-flare-leo-010",
+      "failure_mode": "see",
+      "component_class": "mixed-signal",
+      "regime": "LEO",
+      "question": "How does an X-class flare amplify SEE risk on LEO COTS hardware?",
+      "answer": "X-class flares (X-ray >= 1e-4 W/m²) precede SEP events by 30-90 minutes. Increased proton flux (>10 MeV) elevates SEE rate by 100-1000x baseline for the duration of the storm (typically 6-48 hours). Operational response: pre-emptive safe-mode for sensitive payloads, ECC scrubbing acceleration, and deferring non-critical writes to flight-software persistent storage.",
+      "authority_score": 0.88,
+      "citations": [
+        {
+          "title": "NOAA SWPC S-scale",
+          "url": "https://www.swpc.noaa.gov/noaa-scales-explanation"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-cpu-leo-ex001",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "LEO",
+      "question": "How does a Single Event Effect manifest in a COTS cpu subsystem in LEO?",
+      "answer": "Single-event upsets on COTS CPU registers manifest as silent data corruption — surfaced via watchdog checksum mismatch or sudden control-flow divergence. Mitigation: software-implemented TMR on critical state, periodic register scrub, and ECC-protected caches (if available). LEO SBU rate ~1e-10 errors/bit-day; rises 100x during X-class flares.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-gpu-leo-ex002",
+      "failure_mode": "see",
+      "component_class": "gpu",
+      "regime": "LEO",
+      "question": "How does a Single Event Effect manifest in a COTS gpu subsystem in LEO?",
+      "answer": "COTS NVIDIA Jetson / Orin GPUs in LEO show elevated VRAM ECC error counts during SEP storms. HBM3 has on-die ECC for single-bit errors; uncorrectable double-bit errors typically force kernel panic. Mitigation: workload checkpointing, idle the GPU during high-flux passes, monitor `nvidia-smi --query-gpu=ecc.errors.*`.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-memory-leo-ex003",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "LEO",
+      "question": "How does a Single Event Effect manifest in a COTS memory subsystem in LEO?",
+      "answer": "Multiple-bit-upset rate in commercial DRAM in LEO ~1e-11 errors/bit-day. ECC SEC-DED catches SBU but not adjacent-cell MBU. Software scrubbing on a periodic schedule (every 2-4 minutes) reduces the latent-error window. Symptom: rising uncorrectable-error counter in memory controller statistics.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-transceiver-leo-ex004",
+      "failure_mode": "see",
+      "component_class": "transceiver",
+      "regime": "LEO",
+      "question": "How does a Single Event Effect manifest in a COTS transceiver subsystem in LEO?",
+      "answer": "RF transceivers exhibit transient bit-error spikes during SEP events. The TWTA's high-voltage section is particularly vulnerable to SEL. Mitigation: AGC threshold widening during predicted storm windows, automatic re-keying of the modem on persistent BER elevation above 1e-5.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-voltage-regulator-leo-ex005",
+      "failure_mode": "see",
+      "component_class": "voltage-regulator",
+      "regime": "LEO",
+      "question": "How does a Single Event Effect manifest in a COTS voltage regulator subsystem in LEO?",
+      "answer": "Buck/boost regulators in LEO can experience SET on the feedback pin causing transient output voltage spikes. Symptom: rail voltage ramp-up of 50-200 mV for 10-50 ms. Mitigation: low-pass filter on the feedback network, hardware UV/OV protection in the load-side.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-fpga-leo-ex001",
+      "failure_mode": "tid",
+      "component_class": "fpga",
+      "regime": "LEO",
+      "question": "What Total Ionizing Dose signature should I monitor on a COTS fpga subsystem in LEO?",
+      "answer": "FPGA leakage current rises with TID; static current draw of the fabric increases 2-5x at end-of-life (~30 krad equivalent). Configuration cell upset rate also rises. Mitigation: derate operating clock frequency by 10% at half-life, schedule full configuration scrub every orbit.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 TID",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        },
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-gpu-leo-ex002",
+      "failure_mode": "tid",
+      "component_class": "gpu",
+      "regime": "LEO",
+      "question": "What Total Ionizing Dose signature should I monitor on a COTS gpu subsystem in LEO?",
+      "answer": "GPU memory controllers degrade earlier than the compute fabric. Expect ECC error rate at 1.5x baseline at 10 krad, 4x at 20 krad. Aitech S-A2300 cert at 20 krad shielded. For a 5-year LEO mission behind 4 mm Al shielding (typical 6 krad/year), GPU stays within margin until year 4.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 TID",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        },
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-power-rail-leo-ex003",
+      "failure_mode": "tid",
+      "component_class": "power-rail",
+      "regime": "LEO",
+      "question": "What Total Ionizing Dose signature should I monitor on a COTS power rail subsystem in LEO?",
+      "answer": "Linear regulators show output-voltage shift with TID; bipolar input bias current drifts due to ELDR. Symptom: rail voltage low-frequency drift of 20-50 mV over months. Mitigation: in-rush current trim post-launch, periodic voltage-regulation table refresh from ground-stored calibration.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 TID",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        },
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-sensor-leo-ex004",
+      "failure_mode": "tid",
+      "component_class": "sensor",
+      "regime": "LEO",
+      "question": "What Total Ionizing Dose signature should I monitor on a COTS sensor subsystem in LEO?",
+      "answer": "CMOS image sensors accumulate hot pixels with TID; dark-current rises exponentially. Star-tracker rejection lists grow over the mission. Mitigation: dark-current calibration every eclipse, hot-pixel masking via on-board flat-field calibration data.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 TID",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        },
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        }
+      ]
+    },
+    {
+      "entry_id": "dielectric_charge-fpga-leo-ex001",
+      "failure_mode": "dielectric_charge",
+      "component_class": "fpga",
+      "regime": "LEO",
+      "question": "How does deep dielectric charging affect a COTS fpga subsystem in LEO?",
+      "answer": "Floating-net dielectric charging on FPGA package can cause intermittent IO failures on eclipse exit. Symptom: occasional missing or stuck-at-1 IOs on otherwise healthy GPIOs. Mitigation: package-level conductive coating, periodic GPIO direction sanity-check sweep.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "ECSS-E-ST-20-06C Spacecraft Charging",
+          "url": "https://ecss.nl/"
+        },
+        {
+          "title": "NASA-HDBK-4002A Surface Charging",
+          "url": "https://standards.nasa.gov/"
+        }
+      ]
+    },
+    {
+      "entry_id": "dielectric_charge-cpu-leo-ex002",
+      "failure_mode": "dielectric_charge",
+      "component_class": "cpu",
+      "regime": "LEO",
+      "question": "How does deep dielectric charging affect a COTS cpu subsystem in LEO?",
+      "answer": "Surface-charging discharge through the CPU package ground network can trigger watchdog resets. Symptom: spurious resets during high-Kp storms, especially on eclipse exit. Mitigation: ground-strap verification, surface-conductive epoxy on dielectric components.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "ECSS-E-ST-20-06C Spacecraft Charging",
+          "url": "https://ecss.nl/"
+        },
+        {
+          "title": "NASA-HDBK-4002A Surface Charging",
+          "url": "https://standards.nasa.gov/"
+        }
+      ]
+    },
+    {
+      "entry_id": "dielectric_charge-transceiver-leo-ex003",
+      "failure_mode": "dielectric_charge",
+      "component_class": "transceiver",
+      "regime": "LEO",
+      "question": "How does deep dielectric charging affect a COTS transceiver subsystem in LEO?",
+      "answer": "Antenna feedhorn dielectric charging during eclipse can cause RF arc-discharge on eclipse exit. Symptom: brief comms blackout of 0.1-0.4 s coinciding with eclipse boundary crossings during high-Kp periods. Mitigation: hard-spec the feedhorn for plasma exposure, monitor the RF return-loss for arc signatures.",
+      "authority_score": 0.78,
+      "citations": [
+        {
+          "title": "ECSS-E-ST-20-06C Spacecraft Charging",
+          "url": "https://ecss.nl/"
+        },
+        {
+          "title": "NASA-HDBK-4002A Surface Charging",
+          "url": "https://standards.nasa.gov/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-sel-leo-001-meo",
+      "failure_mode": "see",
+      "component_class": "power-rail",
+      "regime": "MEO",
+      "question": "What is the immediate signature of a Single Event Latch-up on a COTS power rail?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; Sudden current draw spike of 100-400 mA above nominal on the supply rail, lasting 0.4-1.5 s, accompanied by a rail voltage droop of 0.1-0.25 V. Mitigation: cycle the affected rail within the SEL hold-time budget (typically <2 s) before thermal runaway destroys the latched device.",
+      "authority_score": 0.75,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 Section 6.4",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A SEE Test Standard",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-sel-leo-001-geo",
+      "failure_mode": "see",
+      "component_class": "power-rail",
+      "regime": "GEO",
+      "question": "What is the immediate signature of a Single Event Latch-up on a COTS power rail?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; Sudden current draw spike of 100-400 mA above nominal on the supply rail, lasting 0.4-1.5 s, accompanied by a rail voltage droop of 0.1-0.25 V. Mitigation: cycle the affected rail within the SEL hold-time budget (typically <2 s) before thermal runaway destroys the latched device.",
+      "authority_score": 0.75,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 Section 6.4",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A SEE Test Standard",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-sel-leo-001-heo",
+      "failure_mode": "see",
+      "component_class": "power-rail",
+      "regime": "HEO",
+      "question": "What is the immediate signature of a Single Event Latch-up on a COTS power rail?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); Sudden current draw spike of 100-400 mA above nominal on the supply rail, lasting 0.4-1.5 s, accompanied by a rail voltage droop of 0.1-0.25 V. Mitigation: cycle the affected rail within the SEL hold-time budget (typically <2 s) before thermal runaway destroys the latched device.",
+      "authority_score": 0.75,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 Section 6.4",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A SEE Test Standard",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-set-leo-002-meo",
+      "failure_mode": "see",
+      "component_class": "fpga",
+      "regime": "MEO",
+      "question": "How do Single Event Transients in FPGA configuration cells manifest in telemetry?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; SEU/SET in configuration memory cause functional drift visible as elevated SEU bit-error-rate (BER > 1e-7) over the previous orbit's baseline. Scrub the configuration through partial reconfiguration; if BER stays elevated for >3 consecutive frames, full reconfiguration is recommended.",
+      "authority_score": 0.7,
+      "citations": [
+        {
+          "title": "Xilinx UG116 SEU Mitigation",
+          "url": "https://www.xilinx.com/support/documentation/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-set-leo-002-geo",
+      "failure_mode": "see",
+      "component_class": "fpga",
+      "regime": "GEO",
+      "question": "How do Single Event Transients in FPGA configuration cells manifest in telemetry?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; SEU/SET in configuration memory cause functional drift visible as elevated SEU bit-error-rate (BER > 1e-7) over the previous orbit's baseline. Scrub the configuration through partial reconfiguration; if BER stays elevated for >3 consecutive frames, full reconfiguration is recommended.",
+      "authority_score": 0.7,
+      "citations": [
+        {
+          "title": "Xilinx UG116 SEU Mitigation",
+          "url": "https://www.xilinx.com/support/documentation/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-set-leo-002-heo",
+      "failure_mode": "see",
+      "component_class": "fpga",
+      "regime": "HEO",
+      "question": "How do Single Event Transients in FPGA configuration cells manifest in telemetry?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); SEU/SET in configuration memory cause functional drift visible as elevated SEU bit-error-rate (BER > 1e-7) over the previous orbit's baseline. Scrub the configuration through partial reconfiguration; if BER stays elevated for >3 consecutive frames, full reconfiguration is recommended.",
+      "authority_score": 0.7,
+      "citations": [
+        {
+          "title": "Xilinx UG116 SEU Mitigation",
+          "url": "https://www.xilinx.com/support/documentation/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-cmos-leo-003-meo",
+      "failure_mode": "tid",
+      "component_class": "cpu",
+      "regime": "MEO",
+      "question": "What current-leakage signature indicates TID accumulation on a CMOS SoC?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; Exponential rise in idle leakage current (Iddq) of 10-30 % above the launch baseline over months of accumulated dose. At 1.5x baseline, expect thermal margin reduction; at 2x, consider operational duty-cycle reduction. Threshold-voltage shift causes timing-margin erosion in synchronous logic.",
+      "authority_score": 0.77,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "MIL-STD-883 TM 1019",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-cmos-leo-003-geo",
+      "failure_mode": "tid",
+      "component_class": "cpu",
+      "regime": "GEO",
+      "question": "What current-leakage signature indicates TID accumulation on a CMOS SoC?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; Exponential rise in idle leakage current (Iddq) of 10-30 % above the launch baseline over months of accumulated dose. At 1.5x baseline, expect thermal margin reduction; at 2x, consider operational duty-cycle reduction. Threshold-voltage shift causes timing-margin erosion in synchronous logic.",
+      "authority_score": 0.77,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "MIL-STD-883 TM 1019",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-cmos-leo-003-heo",
+      "failure_mode": "tid",
+      "component_class": "cpu",
+      "regime": "HEO",
+      "question": "What current-leakage signature indicates TID accumulation on a CMOS SoC?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); Exponential rise in idle leakage current (Iddq) of 10-30 % above the launch baseline over months of accumulated dose. At 1.5x baseline, expect thermal margin reduction; at 2x, consider operational duty-cycle reduction. Threshold-voltage shift causes timing-margin erosion in synchronous logic.",
+      "authority_score": 0.77,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.9 TID Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "MIL-STD-883 TM 1019",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-eldr-leo-004-meo",
+      "failure_mode": "tid",
+      "component_class": "mixed-signal",
+      "regime": "MEO",
+      "question": "What is the ELDR effect in bipolar mixed-signal devices?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; Enhanced Low Dose Rate Sensitivity — bipolar devices accumulate damage faster at low dose rates (orbital exposure) than at high dose rates (lab testing). RDM >= 2x is recommended over standard 1.5x for bipolar circuits in LEO. Symptom: input offset voltage drift and beta degradation.",
+      "authority_score": 0.73,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 ELDR",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-eldr-leo-004-geo",
+      "failure_mode": "tid",
+      "component_class": "mixed-signal",
+      "regime": "GEO",
+      "question": "What is the ELDR effect in bipolar mixed-signal devices?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; Enhanced Low Dose Rate Sensitivity — bipolar devices accumulate damage faster at low dose rates (orbital exposure) than at high dose rates (lab testing). RDM >= 2x is recommended over standard 1.5x for bipolar circuits in LEO. Symptom: input offset voltage drift and beta degradation.",
+      "authority_score": 0.73,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 ELDR",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-eldr-leo-004-heo",
+      "failure_mode": "tid",
+      "component_class": "mixed-signal",
+      "regime": "HEO",
+      "question": "What is the ELDR effect in bipolar mixed-signal devices?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); Enhanced Low Dose Rate Sensitivity — bipolar devices accumulate damage faster at low dose rates (orbital exposure) than at high dose rates (lab testing). RDM >= 2x is recommended over standard 1.5x for bipolar circuits in LEO. Symptom: input offset voltage drift and beta degradation.",
+      "authority_score": 0.73,
+      "citations": [
+        {
+          "title": "MIL-STD-883 TM 1019.9 ELDR",
+          "url": "https://landandmaritime.dla.mil/Programs/MilSpec/"
+        }
+      ]
+    },
+    {
+      "entry_id": "charge-saa-leo-005-meo",
+      "failure_mode": "dielectric_charge",
+      "component_class": "mixed-signal",
+      "regime": "MEO",
+      "question": "Why does deep dielectric charging risk peak during SAA passes after eclipse?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; Eclipse darkness allows electron flux to accumulate in floating dielectrics without photoemission rebalancing; SAA's energetic electron belt amplifies the deposition rate. Discharge occurs on eclipse exit as sunlight re-ionizes the surrounding plasma. Symptom: sudden ground-referenced potential transient and visible voltage rail droop of 0.05-0.15 V lasting 0.2-0.6 s.",
+      "authority_score": 0.6799999999999999,
+      "citations": [
+        {
+          "title": "ECSS-E-ST-20-06C Spacecraft Charging",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "charge-saa-leo-005-geo",
+      "failure_mode": "dielectric_charge",
+      "component_class": "mixed-signal",
+      "regime": "GEO",
+      "question": "Why does deep dielectric charging risk peak during SAA passes after eclipse?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; Eclipse darkness allows electron flux to accumulate in floating dielectrics without photoemission rebalancing; SAA's energetic electron belt amplifies the deposition rate. Discharge occurs on eclipse exit as sunlight re-ionizes the surrounding plasma. Symptom: sudden ground-referenced potential transient and visible voltage rail droop of 0.05-0.15 V lasting 0.2-0.6 s.",
+      "authority_score": 0.6799999999999999,
+      "citations": [
+        {
+          "title": "ECSS-E-ST-20-06C Spacecraft Charging",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "charge-saa-leo-005-heo",
+      "failure_mode": "dielectric_charge",
+      "component_class": "mixed-signal",
+      "regime": "HEO",
+      "question": "Why does deep dielectric charging risk peak during SAA passes after eclipse?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); Eclipse darkness allows electron flux to accumulate in floating dielectrics without photoemission rebalancing; SAA's energetic electron belt amplifies the deposition rate. Discharge occurs on eclipse exit as sunlight re-ionizes the surrounding plasma. Symptom: sudden ground-referenced potential transient and visible voltage rail droop of 0.05-0.15 V lasting 0.2-0.6 s.",
+      "authority_score": 0.6799999999999999,
+      "citations": [
+        {
+          "title": "ECSS-E-ST-20-06C Spacecraft Charging",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-mbu-leo-006-meo",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "MEO",
+      "question": "How are Multiple Bit Upsets distinguished from Single Bit Upsets?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; MBUs affect adjacent memory cells from a single ion strike; ECC SEC-DED codes detect but cannot correct them, surfacing as uncorrectable error counts in DRAM controller statistics. SBU rate in LEO ~1e-10 errors/bit-day; MBU rate is ~10x lower but rises sharply during SEP events.",
+      "authority_score": 0.71,
+      "citations": [
+        {
+          "title": "JEDEC JESD89A",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-mbu-leo-006-geo",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "GEO",
+      "question": "How are Multiple Bit Upsets distinguished from Single Bit Upsets?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; MBUs affect adjacent memory cells from a single ion strike; ECC SEC-DED codes detect but cannot correct them, surfacing as uncorrectable error counts in DRAM controller statistics. SBU rate in LEO ~1e-10 errors/bit-day; MBU rate is ~10x lower but rises sharply during SEP events.",
+      "authority_score": 0.71,
+      "citations": [
+        {
+          "title": "JEDEC JESD89A",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-mbu-leo-006-heo",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "HEO",
+      "question": "How are Multiple Bit Upsets distinguished from Single Bit Upsets?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); MBUs affect adjacent memory cells from a single ion strike; ECC SEC-DED codes detect but cannot correct them, surfacing as uncorrectable error counts in DRAM controller statistics. SBU rate in LEO ~1e-10 errors/bit-day; MBU rate is ~10x lower but rises sharply during SEP events.",
+      "authority_score": 0.71,
+      "citations": [
+        {
+          "title": "JEDEC JESD89A",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-sefi-leo-007-meo",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "MEO",
+      "question": "What is a Single Event Functional Interrupt and how is it recovered?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; SEFI is a transient functional disruption (lock-up, mode change) that does not directly destroy the device but requires reset to recover. Detect via watchdog timeout or heartbeat loss. Recovery: power-cycle the affected subsystem; if repeated SEFIs occur in <30 minute window, escalate to a safe-mode trigger.",
+      "authority_score": 0.7,
+      "citations": [
+        {
+          "title": "ESA ECSS-Q-ST-30-11C",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-sefi-leo-007-geo",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "GEO",
+      "question": "What is a Single Event Functional Interrupt and how is it recovered?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; SEFI is a transient functional disruption (lock-up, mode change) that does not directly destroy the device but requires reset to recover. Detect via watchdog timeout or heartbeat loss. Recovery: power-cycle the affected subsystem; if repeated SEFIs occur in <30 minute window, escalate to a safe-mode trigger.",
+      "authority_score": 0.7,
+      "citations": [
+        {
+          "title": "ESA ECSS-Q-ST-30-11C",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-sefi-leo-007-heo",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "HEO",
+      "question": "What is a Single Event Functional Interrupt and how is it recovered?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); SEFI is a transient functional disruption (lock-up, mode change) that does not directly destroy the device but requires reset to recover. Detect via watchdog timeout or heartbeat loss. Recovery: power-cycle the affected subsystem; if repeated SEFIs occur in <30 minute window, escalate to a safe-mode trigger.",
+      "authority_score": 0.7,
+      "citations": [
+        {
+          "title": "ESA ECSS-Q-ST-30-11C",
+          "url": "https://ecss.nl/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-gpu-leo-008-meo",
+      "failure_mode": "tid",
+      "component_class": "gpu",
+      "regime": "MEO",
+      "question": "What TID hardness can be expected from a COTS NVIDIA Orin / Jetson SoC in LEO?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; Aitech S-A2300 (Orin-based) certification at 10 krad(Si) bare die / 20 krad(Si) with shielded enclosure (May 2025 test data). Functional degradation above 20 krad shows VRAM ECC error rate climbing exponentially. For a 5-year LEO mission at 540 km, expect ~6 krad/yr behind 4 mm Al — well within margin.",
+      "authority_score": 0.6699999999999999,
+      "citations": [
+        {
+          "title": "Aitech S-A2300 datasheet",
+          "url": "https://www.aitech.com/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-gpu-leo-008-geo",
+      "failure_mode": "tid",
+      "component_class": "gpu",
+      "regime": "GEO",
+      "question": "What TID hardness can be expected from a COTS NVIDIA Orin / Jetson SoC in LEO?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; Aitech S-A2300 (Orin-based) certification at 10 krad(Si) bare die / 20 krad(Si) with shielded enclosure (May 2025 test data). Functional degradation above 20 krad shows VRAM ECC error rate climbing exponentially. For a 5-year LEO mission at 540 km, expect ~6 krad/yr behind 4 mm Al — well within margin.",
+      "authority_score": 0.6699999999999999,
+      "citations": [
+        {
+          "title": "Aitech S-A2300 datasheet",
+          "url": "https://www.aitech.com/"
+        }
+      ]
+    },
+    {
+      "entry_id": "tid-gpu-leo-008-heo",
+      "failure_mode": "tid",
+      "component_class": "gpu",
+      "regime": "HEO",
+      "question": "What TID hardness can be expected from a COTS NVIDIA Orin / Jetson SoC in LEO?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); Aitech S-A2300 (Orin-based) certification at 10 krad(Si) bare die / 20 krad(Si) with shielded enclosure (May 2025 test data). Functional degradation above 20 krad shows VRAM ECC error rate climbing exponentially. For a 5-year LEO mission at 540 km, expect ~6 krad/yr behind 4 mm Al — well within margin.",
+      "authority_score": 0.6699999999999999,
+      "citations": [
+        {
+          "title": "Aitech S-A2300 datasheet",
+          "url": "https://www.aitech.com/"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-x-flare-leo-010-meo",
+      "failure_mode": "see",
+      "component_class": "mixed-signal",
+      "regime": "MEO",
+      "question": "How does an X-class flare amplify SEE risk on LEO COTS hardware?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; X-class flares (X-ray >= 1e-4 W/m²) precede SEP events by 30-90 minutes. Increased proton flux (>10 MeV) elevates SEE rate by 100-1000x baseline for the duration of the storm (typically 6-48 hours). Operational response: pre-emptive safe-mode for sensitive payloads, ECC scrubbing acceleration, and deferring non-critical writes to flight-software persistent storage.",
+      "authority_score": 0.73,
+      "citations": [
+        {
+          "title": "NOAA SWPC S-scale",
+          "url": "https://www.swpc.noaa.gov/noaa-scales-explanation"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-x-flare-leo-010-geo",
+      "failure_mode": "see",
+      "component_class": "mixed-signal",
+      "regime": "GEO",
+      "question": "How does an X-class flare amplify SEE risk on LEO COTS hardware?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; X-class flares (X-ray >= 1e-4 W/m²) precede SEP events by 30-90 minutes. Increased proton flux (>10 MeV) elevates SEE rate by 100-1000x baseline for the duration of the storm (typically 6-48 hours). Operational response: pre-emptive safe-mode for sensitive payloads, ECC scrubbing acceleration, and deferring non-critical writes to flight-software persistent storage.",
+      "authority_score": 0.73,
+      "citations": [
+        {
+          "title": "NOAA SWPC S-scale",
+          "url": "https://www.swpc.noaa.gov/noaa-scales-explanation"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-x-flare-leo-010-heo",
+      "failure_mode": "see",
+      "component_class": "mixed-signal",
+      "regime": "HEO",
+      "question": "How does an X-class flare amplify SEE risk on LEO COTS hardware?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); X-class flares (X-ray >= 1e-4 W/m²) precede SEP events by 30-90 minutes. Increased proton flux (>10 MeV) elevates SEE rate by 100-1000x baseline for the duration of the storm (typically 6-48 hours). Operational response: pre-emptive safe-mode for sensitive payloads, ECC scrubbing acceleration, and deferring non-critical writes to flight-software persistent storage.",
+      "authority_score": 0.73,
+      "citations": [
+        {
+          "title": "NOAA SWPC S-scale",
+          "url": "https://www.swpc.noaa.gov/noaa-scales-explanation"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-cpu-leo-ex001-meo",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "MEO",
+      "question": "How does a Single Event Effect manifest in a COTS cpu subsystem in LEO?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; Single-event upsets on COTS CPU registers manifest as silent data corruption — surfaced via watchdog checksum mismatch or sudden control-flow divergence. Mitigation: software-implemented TMR on critical state, periodic register scrub, and ECC-protected caches (if available). LEO SBU rate ~1e-10 errors/bit-day; rises 100x during X-class flares.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-cpu-leo-ex001-geo",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "GEO",
+      "question": "How does a Single Event Effect manifest in a COTS cpu subsystem in LEO?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; Single-event upsets on COTS CPU registers manifest as silent data corruption — surfaced via watchdog checksum mismatch or sudden control-flow divergence. Mitigation: software-implemented TMR on critical state, periodic register scrub, and ECC-protected caches (if available). LEO SBU rate ~1e-10 errors/bit-day; rises 100x during X-class flares.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-cpu-leo-ex001-heo",
+      "failure_mode": "see",
+      "component_class": "cpu",
+      "regime": "HEO",
+      "question": "How does a Single Event Effect manifest in a COTS cpu subsystem in LEO?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); Single-event upsets on COTS CPU registers manifest as silent data corruption — surfaced via watchdog checksum mismatch or sudden control-flow divergence. Mitigation: software-implemented TMR on critical state, periodic register scrub, and ECC-protected caches (if available). LEO SBU rate ~1e-10 errors/bit-day; rises 100x during X-class flares.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-gpu-leo-ex002-meo",
+      "failure_mode": "see",
+      "component_class": "gpu",
+      "regime": "MEO",
+      "question": "How does a Single Event Effect manifest in a COTS gpu subsystem in LEO?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; COTS NVIDIA Jetson / Orin GPUs in LEO show elevated VRAM ECC error counts during SEP storms. HBM3 has on-die ECC for single-bit errors; uncorrectable double-bit errors typically force kernel panic. Mitigation: workload checkpointing, idle the GPU during high-flux passes, monitor `nvidia-smi --query-gpu=ecc.errors.*`.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-gpu-leo-ex002-geo",
+      "failure_mode": "see",
+      "component_class": "gpu",
+      "regime": "GEO",
+      "question": "How does a Single Event Effect manifest in a COTS gpu subsystem in LEO?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; COTS NVIDIA Jetson / Orin GPUs in LEO show elevated VRAM ECC error counts during SEP storms. HBM3 has on-die ECC for single-bit errors; uncorrectable double-bit errors typically force kernel panic. Mitigation: workload checkpointing, idle the GPU during high-flux passes, monitor `nvidia-smi --query-gpu=ecc.errors.*`.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-gpu-leo-ex002-heo",
+      "failure_mode": "see",
+      "component_class": "gpu",
+      "regime": "HEO",
+      "question": "How does a Single Event Effect manifest in a COTS gpu subsystem in LEO?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); COTS NVIDIA Jetson / Orin GPUs in LEO show elevated VRAM ECC error counts during SEP storms. HBM3 has on-die ECC for single-bit errors; uncorrectable double-bit errors typically force kernel panic. Mitigation: workload checkpointing, idle the GPU during high-flux passes, monitor `nvidia-smi --query-gpu=ecc.errors.*`.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-memory-leo-ex003-meo",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "MEO",
+      "question": "How does a Single Event Effect manifest in a COTS memory subsystem in LEO?",
+      "answer": "MEO (~20,000 km, GPS/Galileo orbits) — SEE rate ~5x LEO due to Van Allen inner-belt proton flux; TID rate ~3x LEO behind comparable shielding; Multiple-bit-upset rate in commercial DRAM in LEO ~1e-11 errors/bit-day. ECC SEC-DED catches SBU but not adjacent-cell MBU. Software scrubbing on a periodic schedule (every 2-4 minutes) reduces the latent-error window. Symptom: rising uncorrectable-error counter in memory controller statistics.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-memory-leo-ex003-geo",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "GEO",
+      "question": "How does a Single Event Effect manifest in a COTS memory subsystem in LEO?",
+      "answer": "GEO (~36,000 km, geosynchronous) — outside protective magnetosphere; dielectric-charging risk peaks during geomagnetic storms; SEE rate ~10x LEO during SEP storms; Multiple-bit-upset rate in commercial DRAM in LEO ~1e-11 errors/bit-day. ECC SEC-DED catches SBU but not adjacent-cell MBU. Software scrubbing on a periodic schedule (every 2-4 minutes) reduces the latent-error window. Symptom: rising uncorrectable-error counter in memory controller statistics.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    },
+    {
+      "entry_id": "see-memory-leo-ex003-heo",
+      "failure_mode": "see",
+      "component_class": "memory",
+      "regime": "HEO",
+      "question": "How does a Single Event Effect manifest in a COTS memory subsystem in LEO?",
+      "answer": "HEO (high-eccentricity orbits crossing the Van Allen belts) — transient SEE rate during belt crossings reaches 50x LEO; TID accumulation is bimodal (low at apogee, high at perigee); Multiple-bit-upset rate in commercial DRAM in LEO ~1e-11 errors/bit-day. ECC SEC-DED catches SBU but not adjacent-cell MBU. Software scrubbing on a periodic schedule (every 2-4 minutes) reduces the latent-error window. Symptom: rising uncorrectable-error counter in memory controller statistics.",
+      "authority_score": 0.63,
+      "citations": [
+        {
+          "title": "NASA-STD-8739.10 SEE Test",
+          "url": "https://standards.nasa.gov/"
+        },
+        {
+          "title": "JEDEC JESD89A Single Event Effects",
+          "url": "https://www.jedec.org/standards-documents"
+        }
+      ]
+    }
+  ]
+}
