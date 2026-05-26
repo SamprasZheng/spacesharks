@@ -500,6 +500,8 @@
     });
     if (els.earthCount)  els.earthCount.textContent  = satList.length.toLocaleString();
     if (els.catalogSize) els.catalogSize.textContent = satList.length.toLocaleString();
+    // Re-apply at-risk band colors to the freshly-built dots
+    if (typeof applyRiskBandsToGlobe === "function") applyRiskBandsToGlobe();
   }
   function animateGlobe() {
     const t = performance.now() / 1000;
@@ -521,9 +523,12 @@
           const sp = projectOrbit(sampSat, 0, false);
           pts.push(`${sp.x.toFixed(1)},${sp.y.toFixed(1)}`);
         }
+        // Focus ring color = composite risk band if available, else LLM health
+        const focusBand = SAT_RISK_BAND[STATE.focused.id];
+        const focusCol = (focusBand && BAND_COLORS[focusBand]) || HEALTH_COLOR[STATE.focused.health] || "#fff";
         els.focusOverlay.innerHTML =
-          `<polyline class="focus-track" points="${pts.join(" ")}"/>` +
-          `<circle class="sat focused h-${STATE.focused.health}" cx="${p.x}" cy="${p.y}" r="6"/>`;
+          `<polyline class="focus-track" points="${pts.join(" ")}" style="stroke:${focusCol}"/>` +
+          `<circle class="sat focused" cx="${p.x}" cy="${p.y}" r="6" style="fill:${focusCol};stroke:${focusCol}"/>`;
       }
     }
     requestAnimationFrame(animateGlobe);
@@ -703,6 +708,51 @@
   const BAND_COLORS = {
     GREEN: "#3df0c8", YELLOW: "#ffd166", RED: "#ff6470", BLACK: "#475569",
   };
+
+  // ---------------------------------------------------------------- Composite risk → globe colors
+  // The at-risk endpoint scores every sat by a composite risk formula. When
+  // we have the full ranking, paint each globe dot with its band color so
+  // operators see the danger map directly instead of just the LLM-label colors.
+  const SAT_RISK_BAND = {};  // sat_id -> band string
+
+  async function refreshSatRiskBands() {
+    try {
+      const r = await fetch("/api/neo/at-risk?n=999").then(r => r.json());
+      // Wipe previous map; rebuild
+      for (const k of Object.keys(SAT_RISK_BAND)) delete SAT_RISK_BAND[k];
+      for (const s of (r.top || [])) {
+        SAT_RISK_BAND[s.sat_id] = s.band;
+      }
+      // Apply to existing globe dots immediately
+      applyRiskBandsToGlobe();
+    } catch (e) { /* server may not be ready */ }
+  }
+
+  function applyRiskBandsToGlobe() {
+    if (!satEls) return;
+    for (const id in satEls) {
+      const dot = satEls[id]?.dot;
+      if (!dot) continue;
+      const band = SAT_RISK_BAND[id];
+      if (band && BAND_COLORS[band]) {
+        dot.style.fill = BAND_COLORS[band];
+        dot.style.stroke = BAND_COLORS[band];
+        // Bigger radius for RED/BLACK so they stand out
+        if (band === "RED" || band === "BLACK") {
+          dot.setAttribute("r", "4.6");
+        } else if (band === "YELLOW") {
+          dot.setAttribute("r", "3.6");
+        }
+      } else {
+        // No risk data yet — leave defaults
+        dot.style.fill = "";
+        dot.style.stroke = "";
+      }
+    }
+  }
+
+  // Refresh every 15s — composite risk shifts when SWPC/COTS state changes.
+  refreshSatRiskBands(); setInterval(refreshSatRiskBands, 15_000);
 
   async function refreshNeoWorldView() {
     // 1) At-Risk Queue
